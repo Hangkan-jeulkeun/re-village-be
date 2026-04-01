@@ -1,0 +1,4 @@
+-- POSTGRES_DB 환경변수로 기본 DB(jeju_revillage)가 생성됩니다.
+-- 필요한 확장만 활성화하세요.
+-- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- CREATE EXTENSION IF NOT EXISTS "pgcrypto";
