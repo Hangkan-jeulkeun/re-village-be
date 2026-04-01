@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16
+    container_name: jeju-revillage-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: jeju_revillage
+    ports:
+      - "5432:5432"
+    volumes:
+      - jeju_revillage_db:/var/lib/postgresql/data
+
+volumes:
+  jeju_revillage_db:
+

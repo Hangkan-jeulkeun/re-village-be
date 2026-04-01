@@ -1,0 +1,240 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ELDER
+  YOUTH
+  ADMIN
+}
+
+enum AssetType {
+  EMPTY_HOUSE
+  WAREHOUSE
+  FIELD
+  OTHER
+}
+
+enum AssetStatus {
+  PENDING
+  REVIEWING
+  AVAILABLE
+  RENTED
+}
+
+enum ApplicationStatus {
+  SUBMITTED
+  REVIEWING
+  APPROVED
+  REJECTED
+}
+
+enum ContractStatus {
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum SettlementStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum RemodelStatus {
+  RECEIVED
+  REVIEWING
+  COMPLETED
+  REJECTED
+}
+
+enum NotificationType {
+  APPLICATION
+  CONTRACT
+  SETTLEMENT
+  REMODEL
+}
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  passwordHash    String   @map("password_hash")
+  name            String
+  phone           String?
+  role            UserRole @default(YOUTH)
+  profileImageUrl String?  @map("profile_image_url")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  assets            Asset[]
+  applications      Application[]
+  ownedContracts    Contract[]       @relation("ContractOwner")
+  rentedContracts   Contract[]       @relation("ContractTenant")
+  remodelRequests   RemodelRequest[] @relation("RemodelRequester")
+  notifications     Notification[]
+  files             File[]
+  pushTokens        PushToken[]
+
+  @@map("users")
+}
+
+model Asset {
+  id          String      @id @default(uuid())
+  ownerId     String      @map("owner_id")
+  title       String
+  assetType   AssetType   @map("asset_type")
+  status      AssetStatus @default(PENDING)
+  description String?
+  address     String
+  regionCode  String      @map("region_code")
+  latitude    Float?
+  longitude   Float?
+  areaSqm     Int?        @map("area_sqm")
+  desiredRent Int?        @map("desired_rent")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  owner           User             @relation(fields: [ownerId], references: [id])
+  images          AssetImage[]
+  applications    Application[]
+  contracts       Contract[]
+  remodelRequests RemodelRequest[]
+
+  @@map("assets")
+}
+
+model AssetImage {
+  id        String   @id @default(uuid())
+  assetId   String   @map("asset_id")
+  fileUrl   String   @map("file_url")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("asset_images")
+}
+
+model Application {
+  id               String            @id @default(uuid())
+  applicantId      String            @map("applicant_id")
+  assetId          String            @map("asset_id")
+  businessIdea     String            @map("business_idea")
+  businessType     String            @map("business_type")
+  desiredStartDate DateTime          @map("desired_start_date") @db.Date
+  status           ApplicationStatus @default(SUBMITTED)
+  rejectReason     String?           @map("reject_reason")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+
+  applicant User      @relation(fields: [applicantId], references: [id])
+  asset     Asset     @relation(fields: [assetId], references: [id])
+  contract  Contract?
+
+  @@map("applications")
+}
+
+model Contract {
+  id            String         @id @default(uuid())
+  assetId       String         @map("asset_id")
+  tenantId      String         @map("tenant_id")
+  ownerId       String         @map("owner_id")
+  applicationId String         @unique @map("application_id")
+  startDate     DateTime       @map("start_date") @db.Date
+  endDate       DateTime       @map("end_date") @db.Date
+  monthlyRent   Int            @map("monthly_rent")
+  status        ContractStatus @default(ACTIVE)
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+
+  asset       Asset        @relation(fields: [assetId], references: [id])
+  tenant      User         @relation("ContractTenant", fields: [tenantId], references: [id])
+  owner       User         @relation("ContractOwner", fields: [ownerId], references: [id])
+  application Application  @relation(fields: [applicationId], references: [id])
+  settlements Settlement[]
+
+  @@map("contracts")
+}
+
+model Settlement {
+  id          String           @id @default(uuid())
+  contractId  String           @map("contract_id")
+  settleMonth String           @map("settle_month")
+  amount      Int
+  status      SettlementStatus @default(PENDING)
+  paidAt      DateTime?        @map("paid_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  contract Contract @relation(fields: [contractId], references: [id])
+
+  @@unique([contractId, settleMonth])
+  @@map("settlements")
+}
+
+model RemodelRequest {
+  id          String        @id @default(uuid())
+  assetId     String        @map("asset_id")
+  requestedBy String        @map("requested_by")
+  description String
+  status      RemodelStatus @default(RECEIVED)
+  adminNote   String?       @map("admin_note")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  asset     Asset @relation(fields: [assetId], references: [id])
+  requester User  @relation("RemodelRequester", fields: [requestedBy], references: [id])
+
+  @@map("remodel_requests")
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  type      NotificationType
+  title     String
+  body      String
+  isRead    Boolean          @default(false) @map("is_read")
+  refType   String?          @map("ref_type")
+  refId     String?          @map("ref_id")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model File {
+  id            String   @id @default(uuid())
+  uploadedBy    String   @map("uploaded_by")
+  originalName  String   @map("original_name")
+  storedName    String   @map("stored_name")
+  fileUrl       String   @map("file_url")
+  mimeType      String   @map("mime_type")
+  fileSizeBytes Int      @map("file_size_bytes")
+  refType       String?  @map("ref_type")
+  refId         String?  @map("ref_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  uploader User @relation(fields: [uploadedBy], references: [id])
+
+  @@map("files")
+}
+
+model PushToken {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  platform  String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("push_tokens")
+}
