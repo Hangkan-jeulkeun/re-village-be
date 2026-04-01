@@ -1,15 +1,32 @@
 import { AssetType } from '@prisma/client';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsEnum,
   IsInt,
   IsLatitude,
   IsLongitude,
   IsOptional,
   IsString,
+  IsUrl,
   Length,
   Min,
+  ValidateNested,
 } from 'class-validator';
+
+export class AssetImageInputDto {
+  @ApiProperty({ example: 'https://cdn.example.com/assets/room-1.jpg' })
+  @IsUrl()
+  fileUrl!: string;
+
+  @ApiPropertyOptional({ example: 0, description: '정렬 순서 (0부터 시작)' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
+}
 
 export class CreateAssetDto {
   @ApiProperty({ example: '한림읍 창고 임대' })
@@ -58,4 +75,15 @@ export class CreateAssetDto {
   @IsInt()
   @Min(0)
   desiredRent?: number;
+
+  @ApiPropertyOptional({
+    type: [AssetImageInputDto],
+    description: '자산 이미지 목록 (최대 20장)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => AssetImageInputDto)
+  images?: AssetImageInputDto[];
 }

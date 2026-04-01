@@ -27,6 +27,21 @@ export class AssetsService {
         longitude: dto.longitude,
         areaSqm: dto.areaSqm,
         desiredRent: dto.desiredRent,
+        ...(dto.images && dto.images.length > 0
+          ? {
+              images: {
+                create: dto.images.map((image, index) => ({
+                  fileUrl: image.fileUrl,
+                  sortOrder: image.sortOrder ?? index,
+                })),
+              },
+            }
+          : {}),
+      },
+      include: {
+        images: {
+          orderBy: { sortOrder: 'asc' },
+        },
       },
     });
   }
@@ -55,6 +70,11 @@ export class AssetsService {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
+        include: {
+          images: {
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
       }),
       this.prisma.asset.count({ where }),
     ]);
@@ -80,7 +100,9 @@ export class AssetsService {
             role: true,
           },
         },
-        images: true,
+        images: {
+          orderBy: { sortOrder: 'asc' },
+        },
       },
     });
 
@@ -101,9 +123,41 @@ export class AssetsService {
       throw new ForbiddenException('수정 권한이 없습니다.');
     }
 
-    return this.prisma.asset.update({
-      where: { id },
-      data: dto,
+    const { images, ...assetData } = dto;
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.asset.update({
+        where: { id },
+        data: assetData,
+      });
+
+      if (images !== undefined) {
+        await tx.assetImage.deleteMany({ where: { assetId: id } });
+        if (images.length > 0) {
+          await tx.assetImage.createMany({
+            data: images.map((image, index) => ({
+              assetId: id,
+              fileUrl: image.fileUrl,
+              sortOrder: image.sortOrder ?? index,
+            })),
+          });
+        }
+      }
+
+      const fresh = await tx.asset.findUnique({
+        where: { id: updated.id },
+        include: {
+          images: {
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      });
+
+      if (!fresh) {
+        throw new NotFoundException('자산을 찾을 수 없습니다.');
+      }
+
+      return fresh;
     });
   }
 }
