@@ -49,9 +49,10 @@ bun run db:seed
 - `TOUR_API_MOBILE_APP` (기본값: `JejuReVillage`)
 - `TOUR_API_RADIUS_METERS` (기본값: `3000`)
 - `TOUR_API_NUM_ROWS` (기본값: `5`)
-- `INFOBIP_BASE_URL` (예: `https://xxxx.api.infobip.com`)
-- `INFOBIP_API_KEY`
-- `INFOBIP_SENDER` (예: `ServiceSMS`)
+- `SOLAPI_BASE_URL` (기본값: `https://api.solapi.com`)
+- `SOLAPI_API_KEY`
+- `SOLAPI_API_SECRET`
+- `SOLAPI_SENDER` (솔라피에 등록된 발신번호, 예: `01012345678`)
 
 예시:
 
@@ -69,8 +70,9 @@ kubectl create secret generic app-ai-secret -n goormthon-6 \
   --from-literal=TOUR_API_MOBILE_APP='JejuReVillage' \
   --from-literal=TOUR_API_RADIUS_METERS='3000' \
   --from-literal=TOUR_API_NUM_ROWS='5' \
-  --from-literal=INFOBIP_BASE_URL='https://xxxx.api.infobip.com' \
-  --from-literal=INFOBIP_API_KEY='YOUR_INFOBIP_API_KEY' \
-  --from-literal=INFOBIP_SENDER='ServiceSMS' \
+  --from-literal=SOLAPI_BASE_URL='https://api.solapi.com' \
+  --from-literal=SOLAPI_API_KEY='YOUR_SOLAPI_API_KEY' \
+  --from-literal=SOLAPI_API_SECRET='YOUR_SOLAPI_API_SECRET' \
+  --from-literal=SOLAPI_SENDER='01012345678' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```

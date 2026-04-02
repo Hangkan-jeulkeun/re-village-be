@@ -18,6 +18,7 @@ import {
   UserRole,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { createHmac } from 'crypto';
 import dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -1019,27 +1020,37 @@ export class ApplicationsService {
   }
 
   private isSmsConfigured(): boolean {
-    const baseUrl = this.configService.get<string>('sms.infobipBaseUrl');
-    const apiKey = this.configService.get<string>('sms.infobipApiKey');
-    return Boolean(baseUrl && apiKey);
+    const apiKey = this.configService.get<string>('sms.solapiApiKey');
+    const apiSecret = this.configService.get<string>('sms.solapiApiSecret');
+    const sender = this.configService.get<string>('sms.solapiSender');
+    return Boolean(apiKey && apiSecret && sender);
   }
 
   private async sendVerificationCodeSms(
     toPhone: string,
     code: string,
   ): Promise<boolean> {
-    const baseUrlRaw = this.configService.get<string>('sms.infobipBaseUrl');
-    const apiKey = this.configService.get<string>('sms.infobipApiKey');
-    const sender = this.configService.get<string>('sms.infobipSender') ?? 'ServiceSMS';
+    const baseUrlRaw =
+      this.configService.get<string>('sms.solapiBaseUrl') ?? 'https://api.solapi.com';
+    const apiKey = this.configService.get<string>('sms.solapiApiKey');
+    const apiSecret = this.configService.get<string>('sms.solapiApiSecret');
+    const sender = this.configService.get<string>('sms.solapiSender');
     const timeoutMs = this.configService.get<number>('sms.timeoutMs') ?? 5000;
 
-    if (!baseUrlRaw || !apiKey) {
+    if (!baseUrlRaw || !apiKey || !apiSecret || !sender) {
       return false;
     }
 
+    const formattedTo = this.formatSolapiPhone(toPhone);
+    const formattedSender = this.formatSolapiPhone(sender);
     const baseUrl = baseUrlRaw.replace(/\/+$/, '');
-    const endpoint = `${baseUrl}/sms/3/messages`;
+    const endpoint = `${baseUrl}/messages/v4/send`;
     const message = `[제주 리-빌리지] 인증번호 ${code} (3분 유효)`;
+    const date = new Date().toISOString();
+    const salt = uuidv4();
+    const signature = createHmac('sha256', apiSecret)
+      .update(date + salt)
+      .digest('hex');
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -1048,20 +1059,16 @@ export class ApplicationsService {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
-          Authorization: `App ${apiKey}`,
+          Authorization: `HMAC-SHA256 apiKey=${apiKey}, date=${date}, salt=${salt}, signature=${signature}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
         body: JSON.stringify({
-          messages: [
-            {
-              sender,
-              destinations: [{ to: toPhone }],
-              content: {
-                text: message,
-              },
-            },
-          ],
+          message: {
+            to: formattedTo,
+            from: formattedSender,
+            text: message,
+          },
         }),
         signal: controller.signal,
       });
@@ -1072,6 +1079,20 @@ export class ApplicationsService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private formatSolapiPhone(phone: string): string {
+    const trimmed = phone.trim();
+    if (!/^\+?[0-9-]+$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    const digits = trimmed.replace(/[^0-9]/g, '');
+    if (digits.startsWith('82') && digits.length >= 11) {
+      return `0${digits.slice(2)}`;
+    }
+
+    return digits;
   }
 
   private extractFilename(url: string): string {
