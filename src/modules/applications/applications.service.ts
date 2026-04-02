@@ -175,45 +175,60 @@ export class ApplicationsService {
     uploadFiles: QuickApplicationUploadFiles = {},
     contentType?: string,
   ) {
-    this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
+    const normalizedDto = this.normalizeQuickApplicationDto(dto);
+    this.validateQuickApplicationUploadInput(normalizedDto, uploadFiles, contentType);
 
     const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
-    const documentSources = this.buildDocumentSources(dto, uploadFiles.documents ?? []);
+    const documentSources = this.buildDocumentSources(normalizedDto, uploadFiles.documents ?? []);
     const pdfExtracted = await this.extractPdfAutoFillFromDocuments(documentSources);
     const applicant = await this.getApplicantFromToken(userId);
     const applicantName = applicant.name;
     const autoFilled = await this.resolveAutoFillFromInput({
-      address: dto.address ?? dto.detectedAddress ?? pdfExtracted?.address ?? undefined,
-      latitude: dto.latitude,
-      longitude: dto.longitude,
+      address:
+        normalizedDto.address ??
+        normalizedDto.detectedAddress ??
+        pdfExtracted?.address ??
+        undefined,
+      latitude: normalizedDto.latitude,
+      longitude: normalizedDto.longitude,
       assetType:
-        dto.assetType ??
-        dto.detectedAssetType ??
+        normalizedDto.assetType ??
+        normalizedDto.detectedAssetType ??
         pdfExtracted?.detectedAssetType ??
         undefined,
       areaSqm:
-        dto.areaSqm ??
-        dto.detectedAreaSqm ??
+        normalizedDto.areaSqm ??
+        normalizedDto.detectedAreaSqm ??
         pdfExtracted?.detectedAreaSqm ??
         undefined,
-      floorCount: dto.floorCount ?? pdfExtracted?.detectedFloorCount ?? undefined,
-      hasYard: dto.hasYard ?? pdfExtracted?.hasYard ?? undefined,
-      hasParking: dto.hasParking ?? pdfExtracted?.hasParking ?? undefined,
-      photoUrls: [...(dto.photoUrls ?? []), ...uploadedPhotoUrls],
+      floorCount: normalizedDto.floorCount ?? pdfExtracted?.detectedFloorCount ?? undefined,
+      hasYard: normalizedDto.hasYard ?? pdfExtracted?.hasYard ?? undefined,
+      hasParking: normalizedDto.hasParking ?? pdfExtracted?.hasParking ?? undefined,
+      photoUrls: [...(normalizedDto.photoUrls ?? []), ...uploadedPhotoUrls],
     });
 
     const assetId = await this.createAssetForQuickApplication(
       applicant.id,
-      dto,
+      normalizedDto,
       autoFilled,
       pdfExtracted,
       uploadedPhotoUrls,
       applicantName,
     );
 
-    const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
+    const application = await this.createApplicationRecord(
+      applicant.id,
+      assetId,
+      applicantName,
+      normalizedDto,
+    );
 
-    await this.attachDocuments(applicant.id, application.id, dto, uploadFiles.documents);
+    await this.attachDocuments(
+      applicant.id,
+      application.id,
+      normalizedDto,
+      uploadFiles.documents,
+    );
     const tokens = await this.generateTokens(
       application.applicant.id,
       application.applicant.email,
@@ -1008,6 +1023,87 @@ export class ApplicationsService {
     if ((dto.photoUrls?.length ?? 0) > 0 && photoCount > 0) {
       // URL + 업로드 동시 사용 허용
     }
+  }
+
+  private normalizeQuickApplicationDto(dto: QuickApplicationDto): QuickApplicationDto {
+    return {
+      ...dto,
+      areaSqm: this.parseOptionalInt(dto.areaSqm, 'areaSqm'),
+      detectedAreaSqm: this.parseOptionalInt(dto.detectedAreaSqm, 'detectedAreaSqm'),
+      floorCount: this.parseOptionalInt(dto.floorCount, 'floorCount'),
+      latitude: this.parseOptionalFloat(dto.latitude, 'latitude'),
+      longitude: this.parseOptionalFloat(dto.longitude, 'longitude'),
+      hasYard: this.parseOptionalBoolean(dto.hasYard, 'hasYard'),
+      hasParking: this.parseOptionalBoolean(dto.hasParking, 'hasParking'),
+      photoUrls: this.toStringArraySafe(dto.photoUrls),
+      documentUrls: this.toStringArraySafe(dto.documentUrls),
+      desiredStartDate: this.parseOptionalDate(dto.desiredStartDate, 'desiredStartDate'),
+    };
+  }
+
+  private parseOptionalInt(value: unknown, field: string): number | undefined {
+    if (value == null || value === '') {
+      return undefined;
+    }
+    const numeric =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+          ? Number(value.trim())
+          : Number.NaN;
+    if (!Number.isFinite(numeric) || !Number.isInteger(numeric) || numeric <= 0) {
+      throw new BadRequestException(`${field}는 1 이상의 정수여야 합니다.`);
+    }
+    return numeric;
+  }
+
+  private parseOptionalFloat(value: unknown, field: string): number | undefined {
+    if (value == null || value === '') {
+      return undefined;
+    }
+    const numeric =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+          ? Number(value.trim())
+          : Number.NaN;
+    if (!Number.isFinite(numeric)) {
+      throw new BadRequestException(`${field}는 숫자 형식이어야 합니다.`);
+    }
+    return numeric;
+  }
+
+  private parseOptionalBoolean(value: unknown, field: string): boolean | undefined {
+    if (value == null || value === '') {
+      return undefined;
+    }
+    const parsed = this.coerceBoolean(value);
+    if (parsed == null) {
+      throw new BadRequestException(
+        `${field}는 true/false(또는 1/0, 있음/없음) 형식이어야 합니다.`,
+      );
+    }
+    return parsed;
+  }
+
+  private parseOptionalDate(value: unknown, field: string): Date | undefined {
+    if (value == null || value === '') {
+      return undefined;
+    }
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) {
+        throw new BadRequestException(`${field} 날짜 형식이 올바르지 않습니다.`);
+      }
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        throw new BadRequestException(`${field} 날짜 형식이 올바르지 않습니다.`);
+      }
+      return parsed;
+    }
+    throw new BadRequestException(`${field} 날짜 형식이 올바르지 않습니다.`);
   }
 
   private filesToDataUrls(files: Express.Multer.File[] | undefined): string[] {
@@ -2362,6 +2458,10 @@ export class ApplicationsService {
           '데이터베이스 enum 스키마가 최신 상태가 아닙니다. 관리자에게 문의해주세요.',
         );
       }
+    }
+
+    if (error instanceof Prisma.PrismaClientValidationError) {
+      throw new BadRequestException('신청 입력값 형식이 올바르지 않습니다.');
     }
 
     throw new InternalServerErrorException(
