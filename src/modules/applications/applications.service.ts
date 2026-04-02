@@ -85,30 +85,11 @@ export class ApplicationsService {
     const applicantName = this.resolveApplicantName(dto);
     const applicant = await this.findOrCreateApplicant(dto);
 
-    const assetId = dto.assetId ?? (await this.createAssetForQuickApplication(applicant.id, dto));
+    const assetId = dto.assetId
+      ? await this.resolveExistingAssetId(dto.assetId)
+      : await this.createAssetForQuickApplication(applicant.id, dto);
 
-    const application = await this.prisma.application.create({
-      data: {
-        applicantId: applicant.id,
-        assetId,
-        businessIdea: dto.notes?.trim() || `${applicantName} 신청`,
-        businessType: 'VACANCY_REQUEST',
-        desiredStartDate: dto.desiredStartDate ?? new Date(),
-        status: ApplicationStatus.RECEIVED,
-      },
-      include: {
-        applicant: {
-          select: { id: true, name: true, phone: true, email: true },
-        },
-        asset: {
-          include: {
-            images: {
-              orderBy: { sortOrder: 'asc' },
-            },
-          },
-        },
-      },
-    });
+    const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
 
     await this.attachDocuments(applicant.id, application.id, dto);
 
@@ -116,6 +97,64 @@ export class ApplicationsService {
       ...application,
       statusLabel: this.statusLabel(application.status),
     };
+  }
+
+  private async resolveExistingAssetId(assetId: string): Promise<string> {
+    const existing = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw new NotFoundException(
+        '선택한 매물을 찾을 수 없습니다. 목록에서 다시 선택해주세요.',
+      );
+    }
+
+    return existing.id;
+  }
+
+  private async createApplicationRecord(
+    applicantId: string,
+    assetId: string,
+    applicantName: string,
+    dto: QuickApplicationDto,
+  ) {
+    try {
+      return await this.prisma.application.create({
+        data: {
+          applicantId,
+          assetId,
+          businessIdea: dto.notes?.trim() || `${applicantName} 신청`,
+          businessType: 'VACANCY_REQUEST',
+          desiredStartDate: dto.desiredStartDate ?? new Date(),
+          status: ApplicationStatus.RECEIVED,
+        },
+        include: {
+          applicant: {
+            select: { id: true, name: true, phone: true, email: true },
+          },
+          asset: {
+            include: {
+              images: {
+                orderBy: { sortOrder: 'asc' },
+              },
+            },
+          },
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2003'
+      ) {
+        throw new NotFoundException(
+          '선택한 매물이 존재하지 않아 신청을 접수할 수 없습니다.',
+        );
+      }
+
+      throw error;
+    }
   }
 
   requestLookupCode(dto: RequestVerificationDto) {
