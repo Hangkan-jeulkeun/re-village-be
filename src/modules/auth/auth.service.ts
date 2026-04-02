@@ -5,9 +5,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { User, UserRole } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
-import { LoginDto } from './dto/login.dto';
 
 export interface TokenResponse {
   accessToken: string;
@@ -31,28 +29,6 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {}
-
-  async login(dto: LoginDto): Promise<{ user: UserResponse } & TokenResponse> {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    if (!user) {
-      throw new UnauthorizedException('이메일 또는 비밀번호가 올바르지 않습니다.');
-    }
-
-    const isValid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!isValid) {
-      throw new UnauthorizedException('이메일 또는 비밀번호가 올바르지 않습니다.');
-    }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('비활성화된 계정입니다.');
-    }
-
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    return {
-      user: this.serializeUser(user),
-      ...tokens,
-    };
-  }
 
   async refresh(userId: string): Promise<TokenResponse> {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });

@@ -1,5 +1,4 @@
 import {
-  Body,
   Controller,
   Post,
   Req,
@@ -14,7 +13,6 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
-import { LoginDto } from './dto/login.dto';
 import { Request } from 'express';
 
 interface RefreshRequestUser {
@@ -25,13 +23,6 @@ interface RefreshRequestUser {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @Post('login')
-  @ApiOperation({ summary: '로그인' })
-  @ApiResponse({ status: 200, description: '로그인 성공 (JWT 토큰 반환)' })
-  login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
-  }
 
   @Post('refresh')
   @UseGuards(AuthGuard('jwt-refresh'))

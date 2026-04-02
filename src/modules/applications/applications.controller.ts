@@ -175,12 +175,6 @@ export class ApplicationsController {
     return this.applicationsService.verifyApplyCode(dto);
   }
 
-  @Post('lookup/verify')
-  @ApiOperation({ summary: '인증번호 검증 후 토큰 발급 + 신청내역 조회' })
-  verifyAndLookup(@Body() dto: VerifyCodeDto) {
-    return this.applicationsService.verifyAndLookup(dto);
-  }
-
   @Patch(':id/cancel')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
