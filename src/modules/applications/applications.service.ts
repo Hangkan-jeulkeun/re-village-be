@@ -85,9 +85,7 @@ export class ApplicationsService {
     const applicantName = this.resolveApplicantName(dto);
     const applicant = await this.findOrCreateApplicant(dto);
 
-    const assetId = dto.assetId
-      ? await this.resolveExistingAssetId(dto.assetId)
-      : await this.createAssetForQuickApplication(applicant.id, dto);
+    const assetId = await this.createAssetForQuickApplication(applicant.id, dto);
 
     const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
 
@@ -97,21 +95,6 @@ export class ApplicationsService {
       ...application,
       statusLabel: this.statusLabel(application.status),
     };
-  }
-
-  private async resolveExistingAssetId(assetId: string): Promise<string> {
-    const existing = await this.prisma.asset.findUnique({
-      where: { id: assetId },
-      select: { id: true },
-    });
-
-    if (!existing) {
-      throw new NotFoundException(
-        '선택한 매물을 찾을 수 없습니다. 목록에서 다시 선택해주세요.',
-      );
-    }
-
-    return existing.id;
   }
 
   private async createApplicationRecord(
@@ -148,8 +131,8 @@ export class ApplicationsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2003'
       ) {
-        throw new NotFoundException(
-          '선택한 매물이 존재하지 않아 신청을 접수할 수 없습니다.',
+        throw new BadRequestException(
+          '신청 자산 정보 생성 중 문제가 발생했습니다. 다시 시도해주세요.',
         );
       }
 

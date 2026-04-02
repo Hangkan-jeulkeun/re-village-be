@@ -152,7 +152,9 @@ export class QuickApplicationDto {
 
   @ApiPropertyOptional({
     format: 'uuid',
-    description: '기존 자산에 연결할 경우 전달 (없으면 신규 자산 생성)',
+    deprecated: true,
+    description:
+      '더 이상 사용하지 않습니다. 신청 시 빈집 자산은 항상 신규 생성됩니다.',
   })
   @IsOptional()
   @IsUUID(4)
