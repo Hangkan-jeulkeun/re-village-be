@@ -44,6 +44,13 @@ interface VerificationCodeEntry {
 
 type VerificationPurpose = 'APPLY' | 'LOOKUP';
 
+interface SmsSendResult {
+  ok: boolean;
+  status?: number;
+  providerCode?: string;
+  providerMessage?: string;
+}
+
 export interface NearbyAttraction {
   name: string;
   distanceMeters: number | null;
@@ -286,21 +293,30 @@ export class ApplicationsService {
       expiresAt: Date.now() + 3 * 60 * 1000,
     });
 
-    const sent = await this.sendVerificationCodeSms(phone, code);
+    const smsResult = await this.sendVerificationCodeSms(phone, code);
     const isDevMode = this.configService.get<string>('app.nodeEnv') !== 'production';
 
-    if (!sent && this.isSmsConfigured()) {
+    if (!smsResult.ok && this.isSmsConfigured()) {
+      const debugReason = [
+        smsResult.status ? `status=${smsResult.status}` : null,
+        smsResult.providerCode ? `code=${smsResult.providerCode}` : null,
+        smsResult.providerMessage ? `message=${smsResult.providerMessage}` : null,
+      ]
+        .filter((item) => item !== null)
+        .join(', ');
       throw new ServiceUnavailableException(
-        '인증번호 SMS 발송에 실패했습니다. 잠시 후 다시 시도해주세요.',
+        debugReason
+          ? `인증번호 SMS 발송에 실패했습니다. (${debugReason})`
+          : '인증번호 SMS 발송에 실패했습니다. 잠시 후 다시 시도해주세요.',
       );
     }
 
     return {
-      message: sent
+      message: smsResult.ok
         ? '인증번호를 전송했습니다.'
         : '인증번호가 발급되었습니다. (개발 모드)',
       expiresInSeconds: 180,
-      ...(isDevMode && !sent ? { code } : {}),
+      ...(isDevMode && !smsResult.ok ? { code } : {}),
     };
   }
 
@@ -1029,7 +1045,7 @@ export class ApplicationsService {
   private async sendVerificationCodeSms(
     toPhone: string,
     code: string,
-  ): Promise<boolean> {
+  ): Promise<SmsSendResult> {
     const baseUrlRaw =
       this.configService.get<string>('sms.solapiBaseUrl') ?? 'https://api.solapi.com';
     const apiKey = this.configService.get<string>('sms.solapiApiKey');
@@ -1038,7 +1054,7 @@ export class ApplicationsService {
     const timeoutMs = this.configService.get<number>('sms.timeoutMs') ?? 5000;
 
     if (!baseUrlRaw || !apiKey || !apiSecret || !sender) {
-      return false;
+      return { ok: false, providerMessage: 'SOLAPI 설정값 누락' };
     }
 
     const formattedTo = this.formatSolapiPhone(toPhone);
@@ -1072,10 +1088,26 @@ export class ApplicationsService {
         }),
         signal: controller.signal,
       });
+      let providerCode: string | undefined;
+      let providerMessage: string | undefined;
+      try {
+        const body = (await response.json()) as
+          | { errorCode?: string; errorMessage?: string; message?: string }
+          | undefined;
+        providerCode = body?.errorCode;
+        providerMessage = body?.errorMessage ?? body?.message;
+      } catch {
+        // noop
+      }
 
-      return response.ok;
+      return {
+        ok: response.ok,
+        status: response.status,
+        providerCode,
+        providerMessage,
+      };
     } catch {
-      return false;
+      return { ok: false, providerMessage: 'SOLAPI 요청 실패(네트워크/타임아웃)' };
     } finally {
       clearTimeout(timeout);
     }
