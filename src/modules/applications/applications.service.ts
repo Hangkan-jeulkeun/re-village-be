@@ -71,13 +71,6 @@ const RANDOM_HOUSE_TYPES: AssetType[] = [
   AssetType.URBAN_HOUSE_VILLA,
 ];
 
-const LEGACY_ASSET_TYPES: AssetType[] = [
-  AssetType.EMPTY_HOUSE,
-  AssetType.WAREHOUSE,
-  AssetType.FIELD,
-  AssetType.OTHER,
-];
-
 interface DocumentSource {
   fileUrl: string;
   mimeType?: string;
@@ -530,19 +523,15 @@ export class ApplicationsService {
   }
 
   async adminSummary(query: AdminSummaryQueryDto) {
-    const month = query.month ?? dayjs().format('YYYY-MM');
-    const start = dayjs(`${month}-01`).startOf('month').toDate();
-    const end = dayjs(`${month}-01`).endOf('month').toDate();
-
+    const range = this.resolveMonthRange(query.month);
     const where: Prisma.ApplicationWhereInput = {
       createdAt: {
-        gte: start,
-        lte: end,
+        gte: range.start,
+        lte: range.end,
       },
     };
 
-    const [total, grouped] = await Promise.all([
-      this.prisma.application.count({ where }),
+    const [grouped, overview] = await Promise.all([
       this.prisma.application.groupBy({
         by: ['status'],
         where,
@@ -550,16 +539,18 @@ export class ApplicationsService {
           _all: true,
         },
       }),
+      this.buildAdminKanbanOverview(range),
     ]);
 
     return {
-      month,
-      total,
+      month: range.month,
+      total: overview.newThisMonth.count,
       statusCounts: grouped.map((item) => ({
         status: item.status,
         label: this.statusLabel(item.status),
         count: item._count._all,
       })),
+      overview,
     };
   }
 
@@ -642,7 +633,15 @@ export class ApplicationsService {
   }
 
   async adminKanban(query: AdminKanbanQueryDto) {
-    const where: Prisma.ApplicationWhereInput = query.search
+    const range = this.resolveMonthRange(query.month);
+    const baseWhere: Prisma.ApplicationWhereInput = {
+      createdAt: {
+        gte: range.start,
+        lte: range.end,
+      },
+    };
+
+    const searchWhere: Prisma.ApplicationWhereInput | undefined = query.search
       ? {
           OR: [
             {
@@ -670,29 +669,36 @@ export class ApplicationsService {
             },
           ],
         }
-      : {};
+      : undefined;
 
-    const items = await this.prisma.application.findMany({
-      where,
-      include: {
-        applicant: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
+    const where: Prisma.ApplicationWhereInput = searchWhere
+      ? { AND: [baseWhere, searchWhere] }
+      : baseWhere;
+
+    const [items, overview] = await Promise.all([
+      this.prisma.application.findMany({
+        where,
+        include: {
+          applicant: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              email: true,
+            },
+          },
+          asset: {
+            select: {
+              id: true,
+              address: true,
+              assetType: true,
+            },
           },
         },
-        asset: {
-          select: {
-            id: true,
-            address: true,
-            assetType: true,
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.buildAdminKanbanOverview(range),
+    ]);
 
     const statusOrder: ApplicationStatus[] = [
       ApplicationStatus.RECEIVED,
@@ -711,8 +717,138 @@ export class ApplicationsService {
     }));
 
     return {
+      month: range.month,
       total: items.length,
+      overview,
       columns,
+    };
+  }
+
+  private resolveMonthRange(month?: string): {
+    month: string;
+    start: Date;
+    end: Date;
+    previousStart: Date;
+    previousEnd: Date;
+  } {
+    const target = month ? dayjs(`${month}-01`) : dayjs();
+    const normalized = target.isValid() ? target : dayjs();
+    const previous = normalized.subtract(1, 'month');
+
+    return {
+      month: normalized.format('YYYY-MM'),
+      start: normalized.startOf('month').toDate(),
+      end: normalized.endOf('month').toDate(),
+      previousStart: previous.startOf('month').toDate(),
+      previousEnd: previous.endOf('month').toDate(),
+    };
+  }
+
+  private async buildAdminKanbanOverview(range: {
+    start: Date;
+    end: Date;
+    previousStart: Date;
+    previousEnd: Date;
+  }) {
+    const monthWhere: Prisma.ApplicationWhereInput = {
+      createdAt: {
+        gte: range.start,
+        lte: range.end,
+      },
+    };
+    const previousMonthWhere: Prisma.ApplicationWhereInput = {
+      createdAt: {
+        gte: range.previousStart,
+        lte: range.previousEnd,
+      },
+    };
+    const inProgressStatuses: ApplicationStatus[] = [
+      ApplicationStatus.REVIEWING,
+      ApplicationStatus.REMODELING,
+      ApplicationStatus.LEASING,
+    ];
+    const urgentThreshold = dayjs(range.end).subtract(7, 'day').toDate();
+
+    const [
+      newThisMonthCount,
+      previousMonthCount,
+      urgentCount,
+      inProgressGrouped,
+      inProgressItems,
+    ] = await Promise.all([
+      this.prisma.application.count({ where: monthWhere }),
+      this.prisma.application.count({ where: previousMonthWhere }),
+      this.prisma.application.count({
+        where: {
+          ...monthWhere,
+          status: ApplicationStatus.RECEIVED,
+          createdAt: {
+            gte: range.start,
+            lte: urgentThreshold < range.end ? urgentThreshold : range.end,
+          },
+        },
+      }),
+      this.prisma.application.groupBy({
+        by: ['status'],
+        where: {
+          ...monthWhere,
+          status: { in: inProgressStatuses },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.application.findMany({
+        where: {
+          ...monthWhere,
+          status: { in: inProgressStatuses },
+        },
+        select: { createdAt: true },
+      }),
+    ]);
+
+    const inProgressCountMap = new Map<ApplicationStatus, number>();
+    for (const row of inProgressGrouped) {
+      inProgressCountMap.set(row.status, row._count._all);
+    }
+
+    const inProgressCount = inProgressItems.length;
+    const remodelingCount = inProgressCountMap.get(ApplicationStatus.REMODELING) ?? 0;
+    const leasingCount = inProgressCountMap.get(ApplicationStatus.LEASING) ?? 0;
+    const avgInProgressDays =
+      inProgressItems.length > 0
+        ? Number(
+            (
+              inProgressItems.reduce(
+                (sum, item) => sum + dayjs().diff(dayjs(item.createdAt), 'day', true),
+                0,
+              ) / inProgressItems.length
+            ).toFixed(1),
+          )
+        : 0;
+
+    return {
+      urgent: {
+        title: '즉시 처리 필요',
+        badge: '긴급',
+        count: urgentCount,
+        condition: '7일 이상 대기(접수됨)',
+      },
+      newThisMonth: {
+        title: '이번달 신규',
+        count: newThisMonthCount,
+        changeFromPreviousMonth: newThisMonthCount - previousMonthCount,
+      },
+      inProgress: {
+        title: '진행 중',
+        count: inProgressCount,
+        remodelingCount,
+        leasingCount,
+      },
+      processingDays: {
+        title: '진행 중 평균 소요일',
+        days: avgInProgressDays,
+        remodelingCount,
+        leasingCount,
+      },
     };
   }
 
@@ -910,21 +1046,11 @@ export class ApplicationsService {
         select: { id: true },
       });
 
-    const persistableAssetType = await this.resolvePersistableAssetType(assetType);
-
     let asset;
     try {
-      asset = await createAsset(persistableAssetType);
+      asset = await createAsset(assetType);
     } catch (error) {
-      if (this.isAssetTypeEnumMismatchError(error)) {
-        try {
-          asset = await createAsset(await this.resolvePersistableAssetType(this.pickLegacyAssetType()));
-        } catch (retryError) {
-          this.throwPrismaException(retryError, 'ASSET_CREATE_RETRY');
-        }
-      } else {
-        this.throwPrismaException(error, 'ASSET_CREATE');
-      }
+      this.throwPrismaException(error, 'ASSET_CREATE');
     }
 
     return asset.id;
@@ -1484,7 +1610,7 @@ export class ApplicationsService {
       '문서에서 신청 화면 자동입력에 필요한 항목을 추출하세요.',
       '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
       'JSON schema:',
-      '{"address":"string|null","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null,"summary":"string|null"}',
+      '{"address":"string|null","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null,"summary":"string|null"}',
       '규칙:',
       '- 값이 불확실하면 null',
       '- detectedAreaSqm는 제곱미터(m2) 기준 숫자',
@@ -1859,7 +1985,7 @@ export class ApplicationsService {
       '어르신이 이해하기 쉬운 한국어로 매물 분석을 작성하세요.',
       '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
       'JSON schema:',
-      '{"strengthSummary":"string","recommendedDirections":["string"],"recommendation":"string","recommendationReason":"string","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null}',
+      '{"strengthSummary":"string","recommendedDirections":["string"],"recommendation":"string","recommendationReason":"string","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null}',
       '출력 규칙:',
       '- strengthSummary: 한 줄 강점 요약(15~45자)',
       '- recommendedDirections: 2~4개 운영 방향',
@@ -1995,7 +2121,7 @@ export class ApplicationsService {
       directions.add('웰니스 프로그램 공간');
     }
 
-    if (result.detectedAssetType === AssetType.FIELD) {
+    if (result.detectedAssetType === AssetType.STONE_WALL_FIELD_HOUSE) {
       directions.add('텃밭 체험형 농촌 프로그램');
     }
 
@@ -2283,10 +2409,6 @@ export class ApplicationsService {
     if (upper === AssetType.NO_STONE_WALL_HOUSE) return AssetType.NO_STONE_WALL_HOUSE;
     if (upper === AssetType.D_SHAPED_HOUSE) return AssetType.D_SHAPED_HOUSE;
     if (upper === AssetType.URBAN_HOUSE_VILLA) return AssetType.URBAN_HOUSE_VILLA;
-    if (upper === AssetType.EMPTY_HOUSE) return AssetType.EMPTY_HOUSE;
-    if (upper === AssetType.WAREHOUSE) return AssetType.WAREHOUSE;
-    if (upper === AssetType.FIELD) return AssetType.FIELD;
-    if (upper === AssetType.OTHER) return AssetType.OTHER;
 
     const normalized = value.replace(/\s+/g, '');
     if (normalized === '돌담+밭주택') return AssetType.STONE_WALL_FIELD_HOUSE;
@@ -2304,75 +2426,6 @@ export class ApplicationsService {
   private pickRandomHouseAssetType(): AssetType {
     const index = Math.floor(Math.random() * RANDOM_HOUSE_TYPES.length);
     return RANDOM_HOUSE_TYPES[index] ?? AssetType.STONE_WALL_HOUSE;
-  }
-
-  private pickLegacyAssetType(): AssetType {
-    const index = Math.floor(Math.random() * LEGACY_ASSET_TYPES.length);
-    return LEGACY_ASSET_TYPES[index] ?? AssetType.OTHER;
-  }
-
-  private async resolvePersistableAssetType(preferred: AssetType): Promise<AssetType> {
-    const supported = await this.getSupportedAssetTypesFromDatabase();
-
-    if (supported.size === 0) {
-      return LEGACY_ASSET_TYPES.includes(preferred) ? preferred : AssetType.OTHER;
-    }
-
-    if (supported.has(preferred)) {
-      return preferred;
-    }
-
-    const randomSupported = RANDOM_HOUSE_TYPES.find((type) => supported.has(type));
-    if (randomSupported) {
-      return randomSupported;
-    }
-
-    const legacySupported = LEGACY_ASSET_TYPES.find((type) => supported.has(type));
-    if (legacySupported) {
-      return legacySupported;
-    }
-
-    return Array.from(supported)[0] ?? AssetType.OTHER;
-  }
-
-  private async getSupportedAssetTypesFromDatabase(): Promise<Set<AssetType>> {
-    try {
-      const rows = await this.prisma.$queryRaw<Array<{ value: string }>>(
-        Prisma.sql`SELECT unnest(enum_range(NULL::"AssetType"))::text as value`,
-      );
-
-      const supported = new Set<AssetType>();
-      for (const row of rows) {
-        const parsed = this.toAssetType(row.value);
-        if (parsed) {
-          supported.add(parsed);
-        }
-      }
-      return supported;
-    } catch {
-      return new Set<AssetType>();
-    }
-  }
-
-  private isAssetTypeEnumMismatchError(error: unknown): boolean {
-    const message =
-      error instanceof Error
-        ? error.message.toLowerCase()
-        : typeof error === 'string'
-          ? error.toLowerCase()
-          : '';
-
-    if (!message) {
-      return false;
-    }
-
-    const hasEnumMismatch = message.includes('invalid input value for enum');
-    const hasAssetType =
-      message.includes('assettype') ||
-      message.includes('"assettype"') ||
-      message.includes("'assettype'");
-
-    return hasEnumMismatch && hasAssetType;
   }
 
   private toApplicationCard(application: ApplicationListItem) {

@@ -124,12 +124,12 @@ export class QuickApplicationDto {
   @IsEmail()
   email?: string;
 
-  @ApiPropertyOptional({ enum: AssetType, example: AssetType.EMPTY_HOUSE })
+  @ApiPropertyOptional({ enum: AssetType, example: AssetType.STONE_WALL_HOUSE })
   @IsOptional()
   @IsEnum(AssetType)
   assetType?: AssetType;
 
-  @ApiPropertyOptional({ enum: AssetType, example: AssetType.EMPTY_HOUSE })
+  @ApiPropertyOptional({ enum: AssetType, example: AssetType.STONE_WALL_HOUSE })
   @IsOptional()
   @IsEnum(AssetType)
   detectedAssetType?: AssetType;

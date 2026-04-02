@@ -34,7 +34,7 @@ export class CreateAssetDto {
   @Length(1, 120)
   title!: string;
 
-  @ApiProperty({ enum: AssetType, example: AssetType.WAREHOUSE })
+  @ApiProperty({ enum: AssetType, example: AssetType.STONE_WALL_HOUSE })
   @IsEnum(AssetType)
   assetType!: AssetType;
 

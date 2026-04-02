@@ -20,10 +20,6 @@ enum AssetType {
   NO_STONE_WALL_HOUSE
   D_SHAPED_HOUSE
   URBAN_HOUSE_VILLA
-  EMPTY_HOUSE
-  WAREHOUSE
-  FIELD
-  OTHER
 }
 
 enum AssetStatus {

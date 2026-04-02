@@ -295,9 +295,6 @@ export class AssetsService {
     if (assetType === AssetType.NO_STONE_WALL_HOUSE) return ['주거', '카페', '소형 창업'];
     if (assetType === AssetType.D_SHAPED_HOUSE) return ['중정형 숙소', '복합공간', '공유주택'];
     if (assetType === AssetType.URBAN_HOUSE_VILLA) return ['도심 임대', '원룸/투룸', '소형 오피스'];
-    if (assetType === AssetType.EMPTY_HOUSE) return ['주거', '게스트하우스', '카페'];
-    if (assetType === AssetType.WAREHOUSE) return ['공방', '창고형 카페'];
-    if (assetType === AssetType.FIELD) return ['농업', '텃밭', '체험농장'];
     return ['주거', '카페', '공방'];
   }
 

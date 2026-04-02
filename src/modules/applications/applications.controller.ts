@@ -62,7 +62,7 @@ export class ApplicationsController {
       properties: {
         email: { type: 'string', example: 'owner@example.com' },
         address: { type: 'string', example: '제주특별자치도 서귀포시 천지동' },
-        assetType: { type: 'string', example: 'EMPTY_HOUSE' },
+        assetType: { type: 'string', example: 'STONE_WALL_HOUSE' },
         areaSqm: { type: 'number', example: 72 },
         floorCount: { type: 'number', example: 1 },
         hasYard: { type: 'boolean', example: true },
@@ -71,7 +71,7 @@ export class ApplicationsController {
         payload: {
           type: 'string',
           example:
-            '{"address":"제주특별자치도 서귀포시 천지동","assetType":"EMPTY_HOUSE"}',
+            '{"address":"제주특별자치도 서귀포시 천지동","assetType":"STONE_WALL_HOUSE"}',
           description:
             '선택. multipart에서 JSON 문자열로 전달 가능. payload와 개별 필드가 겹치면 개별 필드 우선',
         },

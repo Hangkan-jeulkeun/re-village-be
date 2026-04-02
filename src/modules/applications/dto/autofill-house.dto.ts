@@ -64,7 +64,7 @@ export class AutofillHouseDto {
   @IsLongitude()
   longitude?: number;
 
-  @ApiPropertyOptional({ enum: AssetType, example: AssetType.EMPTY_HOUSE })
+  @ApiPropertyOptional({ enum: AssetType, example: AssetType.STONE_WALL_HOUSE })
   @IsOptional()
   @IsEnum(AssetType)
   assetType?: AssetType;
