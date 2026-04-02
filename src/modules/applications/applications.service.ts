@@ -41,12 +41,30 @@ interface VerificationCodeEntry {
   expiresAt: number;
 }
 
+export interface NearbyAttraction {
+  name: string;
+  distanceMeters: number | null;
+  distanceText: string | null;
+}
+
+interface QuickApplicationUploadFiles {
+  photos?: Express.Multer.File[];
+  documents?: Express.Multer.File[];
+}
+
 export interface HouseAutoFillResult {
   address: string | null;
+  eupMyeonDong: string | null;
   latitude: number | null;
   longitude: number | null;
   detectedAssetType: AssetType | null;
   detectedAreaSqm: number | null;
+  detectedFloorCount: number | null;
+  hasYard: boolean | null;
+  hasParking: boolean | null;
+  nearbyAttractions: NearbyAttraction[];
+  strengthSummary: string | null;
+  recommendedDirections: string[];
   recommendation: string | null;
   recommendationReason: string | null;
   warnings: string[];
@@ -97,12 +115,25 @@ export class ApplicationsService {
             },
           },
         },
+        contract: true,
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async createQuick(dto: QuickApplicationDto) {
+  async findMyApplicationsByToken(userId: string) {
+    const applications = await this.findMyApplications(userId);
+    return applications.map((application) => this.toApplicationCard(application));
+  }
+
+  async createQuick(
+    dto: QuickApplicationDto,
+    uploadFiles: QuickApplicationUploadFiles = {},
+    contentType?: string,
+  ) {
+    this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
+
+    const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
     const applicantName = this.resolveApplicantName(dto);
     const applicant = await this.findOrCreateApplicant(dto);
     const autoFilled = await this.resolveAutoFillFromInput({
@@ -111,14 +142,22 @@ export class ApplicationsService {
       longitude: dto.longitude,
       assetType: dto.assetType ?? dto.detectedAssetType,
       areaSqm: dto.areaSqm ?? dto.detectedAreaSqm,
-      photoUrls: dto.photoUrls,
+      floorCount: dto.floorCount,
+      hasYard: dto.hasYard,
+      hasParking: dto.hasParking,
+      photoUrls: [...(dto.photoUrls ?? []), ...uploadedPhotoUrls],
     });
 
-    const assetId = await this.createAssetForQuickApplication(applicant.id, dto, autoFilled);
+    const assetId = await this.createAssetForQuickApplication(
+      applicant.id,
+      dto,
+      autoFilled,
+      uploadedPhotoUrls,
+    );
 
     const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
 
-    await this.attachDocuments(applicant.id, application.id, dto);
+    await this.attachDocuments(applicant.id, application.id, dto, uploadFiles.documents);
     const tokens = await this.generateTokens(
       application.applicant.id,
       application.applicant.email,
@@ -141,6 +180,53 @@ export class ApplicationsService {
     }
 
     return this.resolveAutoFillFromInput(dto);
+  }
+
+  async analyzeMyApplication(userId: string, applicationId: string, role: UserRole) {
+    const application = await this.prisma.application.findUnique({
+      where: { id: applicationId },
+      include: {
+        applicant: {
+          select: { id: true, name: true, phone: true, email: true },
+        },
+        asset: {
+          include: {
+            images: {
+              orderBy: { sortOrder: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    if (!application) {
+      throw new NotFoundException('신청서를 찾을 수 없습니다.');
+    }
+
+    if (application.applicantId !== userId && role !== UserRole.ADMIN) {
+      throw new ForbiddenException('본인 신청 건만 분석할 수 있습니다.');
+    }
+
+    const autoFilled = await this.resolveAutoFillFromInput({
+      address: application.asset.address,
+      latitude: application.asset.latitude ?? undefined,
+      longitude: application.asset.longitude ?? undefined,
+      assetType: application.asset.assetType,
+      areaSqm: application.asset.areaSqm ?? undefined,
+      photoUrls: application.asset.images.map((image) => image.fileUrl),
+    });
+
+    return {
+      applicationId: application.id,
+      status: application.status,
+      statusLabel: this.statusLabel(application.status),
+      applicant: application.applicant,
+      notes: application.businessIdea,
+      analysis: {
+        ...autoFilled,
+        narrative: this.buildAnalysisNarrative(autoFilled),
+      },
+    };
   }
 
   private async createApplicationRecord(
@@ -665,6 +751,7 @@ export class ApplicationsService {
     ownerId: string,
     dto: QuickApplicationDto,
     autoFilled: HouseAutoFillResult,
+    uploadedPhotoUrls: string[],
   ): Promise<string> {
     const name = this.resolveApplicantName(dto);
     const address = dto.address ?? dto.detectedAddress ?? autoFilled.address ?? '주소 미입력';
@@ -676,11 +763,43 @@ export class ApplicationsService {
     const areaSqm = dto.areaSqm ?? dto.detectedAreaSqm ?? autoFilled.detectedAreaSqm ?? undefined;
     const latitude = dto.latitude ?? autoFilled.latitude ?? undefined;
     const longitude = dto.longitude ?? autoFilled.longitude ?? undefined;
-    const aiRecommendation = autoFilled.recommendation
-      ? `\n\n[AI 추천]\n${autoFilled.recommendation}${
-          autoFilled.recommendationReason ? `\n사유: ${autoFilled.recommendationReason}` : ''
-        }`
-      : '';
+    const mergedPhotoUrls = [...(dto.photoUrls ?? []), ...uploadedPhotoUrls];
+    const analysisLines: string[] = [];
+    if (autoFilled.eupMyeonDong) {
+      analysisLines.push(`위치(읍면동): ${autoFilled.eupMyeonDong}`);
+    }
+    if (autoFilled.detectedFloorCount != null) {
+      analysisLines.push(`층수: ${autoFilled.detectedFloorCount}층`);
+    }
+    if (autoFilled.hasYard != null) {
+      analysisLines.push(`마당: ${autoFilled.hasYard ? '있음' : '없음'}`);
+    }
+    if (autoFilled.hasParking != null) {
+      analysisLines.push(`주차: ${autoFilled.hasParking ? '가능' : '불가'}`);
+    }
+    if (autoFilled.nearbyAttractions.length > 0) {
+      analysisLines.push(
+        `주변 관광지: ${autoFilled.nearbyAttractions
+          .map((item) =>
+            item.distanceText ? `${item.name}(${item.distanceText})` : item.name,
+          )
+          .join(', ')}`,
+      );
+    }
+    if (autoFilled.strengthSummary) {
+      analysisLines.push(`강점 요약: ${autoFilled.strengthSummary}`);
+    }
+    if (autoFilled.recommendedDirections.length > 0) {
+      analysisLines.push(`추천 방향: ${autoFilled.recommendedDirections.join(', ')}`);
+    }
+    if (autoFilled.recommendation) {
+      analysisLines.push(`추천 설명: ${autoFilled.recommendation}`);
+    }
+    if (autoFilled.recommendationReason) {
+      analysisLines.push(`근거: ${autoFilled.recommendationReason}`);
+    }
+    const aiRecommendation =
+      analysisLines.length > 0 ? `\n\n[AI 매물 분석]\n${analysisLines.join('\n')}` : '';
     let asset;
     try {
       asset = await this.prisma.asset.create({
@@ -695,11 +814,10 @@ export class ApplicationsService {
           longitude,
           description: `${dto.notes ?? ''}${aiRecommendation}`.trim() || null,
           images: {
-            create:
-            dto.photoUrls?.map((url, index) => ({
-                fileUrl: url,
-                sortOrder: index,
-              })) ?? [],
+            create: mergedPhotoUrls.map((url, index) => ({
+              fileUrl: url,
+              sortOrder: index,
+            })),
           },
         },
         select: { id: true },
@@ -711,32 +829,117 @@ export class ApplicationsService {
     return asset.id;
   }
 
-  private async attachDocuments(userId: string, applicationId: string, dto: QuickApplicationDto) {
+  private async attachDocuments(
+    userId: string,
+    applicationId: string,
+    dto: QuickApplicationDto,
+    uploadedDocumentFiles: Express.Multer.File[] = [],
+  ) {
     const documents = this.normalizeDocuments(dto);
+    const uploadedDocuments = uploadedDocumentFiles.map((file) => ({
+      fileUrl: this.toDataUrl(file),
+      type: ApplicationDocumentType.OTHER,
+      originalName: file.originalname || `${uuidv4()}.dat`,
+      mimeType: file.mimetype || 'application/octet-stream',
+      fileSizeBytes: file.size ?? 0,
+    }));
 
-    if (documents.length === 0) {
+    if (documents.length === 0 && uploadedDocuments.length === 0) {
       return;
     }
 
     try {
       await this.prisma.file.createMany({
-        data: documents.map((document) => {
-          const originalName = this.extractFilename(document.fileUrl);
-          return {
-            uploadedBy: userId,
-            originalName,
-            storedName: originalName,
-            fileUrl: document.fileUrl,
-            mimeType: this.guessMimeType(originalName),
-            fileSizeBytes: 0,
-            refType: `APPLICATION_DOC_${document.type}`,
-            refId: applicationId,
-          };
-        }),
+        data: [
+          ...documents.map((document) => {
+            const originalName = this.extractFilename(document.fileUrl);
+            return {
+              uploadedBy: userId,
+              originalName,
+              storedName: originalName,
+              fileUrl: document.fileUrl,
+              mimeType: this.guessMimeType(originalName),
+              fileSizeBytes: 0,
+              refType: `APPLICATION_DOC_${document.type}`,
+              refId: applicationId,
+            };
+          }),
+          ...uploadedDocuments.map((document) => {
+            const storedName = `${uuidv4()}-${document.originalName}`;
+            return {
+              uploadedBy: userId,
+              originalName: document.originalName,
+              storedName,
+              fileUrl: document.fileUrl,
+              mimeType: document.mimeType,
+              fileSizeBytes: document.fileSizeBytes,
+              refType: `APPLICATION_DOC_${document.type}`,
+              refId: applicationId,
+            };
+          }),
+        ],
       });
     } catch (error) {
       this.throwPrismaException(error, 'DOCUMENT_ATTACH');
     }
+  }
+
+  private validateQuickApplicationUploadInput(
+    dto: QuickApplicationDto,
+    uploadFiles: QuickApplicationUploadFiles,
+    contentType?: string,
+  ) {
+    const photoCount = uploadFiles.photos?.length ?? 0;
+    const docCount = uploadFiles.documents?.length ?? 0;
+    const totalUploadCount = photoCount + docCount;
+
+    if (totalUploadCount === 0) {
+      return;
+    }
+
+    if (!contentType?.includes('multipart/form-data')) {
+      throw new BadRequestException('파일 업로드는 multipart/form-data로 요청해야 합니다.');
+    }
+
+    if (photoCount > 20) {
+      throw new BadRequestException('집 사진은 최대 20개까지 업로드할 수 있습니다.');
+    }
+
+    if (docCount > 20) {
+      throw new BadRequestException('관련 서류는 최대 20개까지 업로드할 수 있습니다.');
+    }
+
+    const maxSize = 10 * 1024 * 1024;
+    for (const file of [...(uploadFiles.photos ?? []), ...(uploadFiles.documents ?? [])]) {
+      if (!file.buffer || file.size <= 0) {
+        throw new BadRequestException('업로드 파일 읽기에 실패했습니다.');
+      }
+      if (file.size > maxSize) {
+        throw new BadRequestException('업로드 파일은 개당 10MB 이하만 허용됩니다.');
+      }
+    }
+
+    if ((dto.photoUrls?.length ?? 0) > 0 && photoCount > 0) {
+      // URL + 업로드 동시 사용 허용
+    }
+  }
+
+  private filesToDataUrls(files: Express.Multer.File[] | undefined): string[] {
+    if (!files || files.length === 0) {
+      return [];
+    }
+
+    return files.map((file) => this.toDataUrl(file));
+  }
+
+  private toDataUrl(file: Express.Multer.File): string {
+    if (!file.buffer) {
+      throw new BadRequestException('업로드 파일 데이터가 비어 있습니다.');
+    }
+
+    const mimeType = file.mimetype?.trim() || 'application/octet-stream';
+    const base64 = file.buffer.toString('base64');
+    return `data:${mimeType};base64,${base64}`;
   }
 
   private normalizePhone(phone: string): string {
@@ -783,6 +986,10 @@ export class ApplicationsService {
   }
 
   private extractFilename(url: string): string {
+    if (url.startsWith('data:')) {
+      return `${uuidv4()}.bin`;
+    }
+
     try {
       const parsed = new URL(url);
       const filename = parsed.pathname.split('/').pop();
@@ -834,28 +1041,42 @@ export class ApplicationsService {
   private async resolveAutoFillFromInput(dto: AutofillHouseDto): Promise<HouseAutoFillResult> {
     const result: HouseAutoFillResult = {
       address: dto.address ?? null,
+      eupMyeonDong: this.extractEupMyeonDong(dto.address ?? null),
       latitude: dto.latitude ?? null,
       longitude: dto.longitude ?? null,
       detectedAssetType: dto.assetType ?? null,
       detectedAreaSqm: dto.areaSqm ?? null,
+      detectedFloorCount: dto.floorCount ?? null,
+      hasYard: dto.hasYard ?? null,
+      hasParking: dto.hasParking ?? null,
+      nearbyAttractions: [],
+      strengthSummary: null,
+      recommendedDirections: [],
       recommendation: null,
       recommendationReason: null,
       warnings: [],
     };
+    const addWarning = (message: string) => {
+      if (!result.warnings.includes(message)) {
+        result.warnings.push(message);
+      }
+    };
 
     const hasGpsKey = Boolean(this.configService.get<string>('ai.gpsApiKey'));
     const hasGeminiKey = Boolean(this.configService.get<string>('ai.geminiApiKey'));
+    const hasTourKey = Boolean(this.configService.get<string>('ai.tourApiKey'));
 
     if (!result.address && result.latitude != null && result.longitude != null) {
       try {
         const reverseAddress = await this.reverseGeocode(result.latitude, result.longitude);
         if (reverseAddress) {
           result.address = reverseAddress;
+          result.eupMyeonDong = this.extractEupMyeonDong(reverseAddress);
         } else if (!hasGpsKey) {
-          result.warnings.push('GPS_API_KEY가 설정되지 않아 주소 자동입력을 건너뜁니다.');
+          addWarning('GPS_API_KEY가 설정되지 않아 주소 자동입력을 건너뜁니다.');
         }
       } catch {
-        result.warnings.push('GPS 역지오코딩에 실패했습니다. 주소를 직접 입력해주세요.');
+        addWarning('GPS 역지오코딩에 실패했습니다. 주소를 직접 입력해주세요.');
       }
     }
 
@@ -866,19 +1087,35 @@ export class ApplicationsService {
           result.latitude = geocoded.latitude;
           result.longitude = geocoded.longitude;
           result.address = geocoded.address ?? result.address;
+          result.eupMyeonDong = this.extractEupMyeonDong(result.address);
         } else if (!hasGpsKey) {
-          result.warnings.push('GPS_API_KEY가 설정되지 않아 좌표 자동입력을 건너뜁니다.');
+          addWarning('GPS_API_KEY가 설정되지 않아 좌표 자동입력을 건너뜁니다.');
         }
       } catch {
-        result.warnings.push('주소 기반 좌표 자동입력에 실패했습니다.');
+        addWarning('주소 기반 좌표 자동입력에 실패했습니다.');
+      }
+    }
+
+    if (result.latitude != null && result.longitude != null) {
+      try {
+        const nearby = await this.findNearbyAttractions(result.latitude, result.longitude);
+        if (nearby) {
+          result.nearbyAttractions = nearby;
+        } else if (!hasTourKey) {
+          addWarning('TOUR_API_KEY가 설정되지 않아 주변 관광지 분석을 건너뜁니다.');
+        }
+      } catch {
+        addWarning('주변 관광지 거리 분석에 실패했습니다.');
       }
     }
 
     if (dto.photoUrls?.length) {
-      const aiRecommendation = await this.recommendByGemini(dto.photoUrls, result.address);
+      const aiRecommendation = await this.recommendByGemini(dto.photoUrls, result);
       if (aiRecommendation) {
         result.recommendation = aiRecommendation.recommendation;
         result.recommendationReason = aiRecommendation.reason;
+        result.strengthSummary = aiRecommendation.strengthSummary;
+        result.recommendedDirections = aiRecommendation.recommendedDirections;
 
         if (!result.detectedAssetType && aiRecommendation.detectedAssetType) {
           result.detectedAssetType = aiRecommendation.detectedAssetType;
@@ -886,13 +1123,36 @@ export class ApplicationsService {
         if (!result.detectedAreaSqm && aiRecommendation.detectedAreaSqm) {
           result.detectedAreaSqm = aiRecommendation.detectedAreaSqm;
         }
+        if (!result.detectedFloorCount && aiRecommendation.detectedFloorCount) {
+          result.detectedFloorCount = aiRecommendation.detectedFloorCount;
+        }
+        if (result.hasYard == null && aiRecommendation.hasYard != null) {
+          result.hasYard = aiRecommendation.hasYard;
+        }
+        if (result.hasParking == null && aiRecommendation.hasParking != null) {
+          result.hasParking = aiRecommendation.hasParking;
+        }
       } else {
-        result.warnings.push(
+        addWarning(
           hasGeminiKey
             ? '사진 기반 AI 추천 생성에 실패했습니다.'
             : 'GEMINI_API_KEY가 설정되지 않아 AI 추천을 건너뜁니다.',
         );
       }
+    }
+
+    const fallback = this.buildRuleBasedRecommendation(result);
+    if (!result.strengthSummary) {
+      result.strengthSummary = fallback.strengthSummary;
+    }
+    if (result.recommendedDirections.length === 0) {
+      result.recommendedDirections = fallback.recommendedDirections;
+    }
+    if (!result.recommendation) {
+      result.recommendation = fallback.recommendation;
+    }
+    if (!result.recommendationReason) {
+      result.recommendationReason = fallback.recommendationReason;
     }
 
     return result;
@@ -964,14 +1224,87 @@ export class ApplicationsService {
     return data.results[0]?.formatted_address ?? null;
   }
 
+  private async findNearbyAttractions(
+    latitude: number,
+    longitude: number,
+  ): Promise<NearbyAttraction[] | null> {
+    const apiKey = this.configService.get<string>('ai.tourApiKey');
+    const baseUrl = this.configService.get<string>('ai.tourApiBaseUrl');
+    const mobileOs = this.configService.get<string>('ai.tourMobileOs') ?? 'ETC';
+    const mobileApp = this.configService.get<string>('ai.tourMobileApp') ?? 'JejuReVillage';
+    const radius = this.configService.get<number>('ai.tourRadiusMeters') ?? 3000;
+    const numRows = this.configService.get<number>('ai.tourNumRows') ?? 5;
+    if (!apiKey || !baseUrl) {
+      return null;
+    }
+
+    const serviceKey = apiKey.includes('%') ? apiKey : encodeURIComponent(apiKey);
+    const url =
+      `${baseUrl}?serviceKey=${serviceKey}` +
+      `&numOfRows=${numRows}&pageNo=1&MobileOS=${encodeURIComponent(mobileOs)}` +
+      `&MobileApp=${encodeURIComponent(mobileApp)}&_type=json&arrange=E&listYN=Y` +
+      `&mapX=${longitude}&mapY=${latitude}&radius=${radius}`;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = (await response.json()) as {
+      response?: {
+        body?: {
+          items?: {
+            item?:
+              | Array<{ title?: string; dist?: string | number }>
+              | { title?: string; dist?: string | number };
+          };
+        };
+      };
+    };
+    const raw = data.response?.body?.items?.item;
+    const items = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+    return items
+      .map((item) => {
+        const name = item.title?.trim();
+        if (!name) {
+          return null;
+        }
+        const distanceRaw =
+          typeof item.dist === 'number' ? item.dist : Number(item.dist ?? Number.NaN);
+        const distanceMeters = Number.isFinite(distanceRaw) ? Math.round(distanceRaw) : null;
+        return {
+          name,
+          distanceMeters,
+          distanceText: this.formatDistance(distanceMeters),
+        };
+      })
+      .filter((item): item is NearbyAttraction => item !== null)
+      .slice(0, 5);
+  }
+
   private async recommendByGemini(
     photoUrls: string[],
-    address: string | null,
+    context: {
+      address: string | null;
+      eupMyeonDong: string | null;
+      detectedAssetType: AssetType | null;
+      detectedAreaSqm: number | null;
+      detectedFloorCount: number | null;
+      hasYard: boolean | null;
+      hasParking: boolean | null;
+      nearbyAttractions: NearbyAttraction[];
+    },
   ): Promise<{
     recommendation: string;
     reason: string | null;
     detectedAssetType: AssetType | null;
     detectedAreaSqm: number | null;
+    detectedFloorCount: number | null;
+    hasYard: boolean | null;
+    hasParking: boolean | null;
+    strengthSummary: string | null;
+    recommendedDirections: string[];
   } | null> {
     const geminiApiKey = this.configService.get<string>('ai.geminiApiKey');
     const geminiModel = this.configService.get<string>('ai.geminiModel');
@@ -989,10 +1322,35 @@ export class ApplicationsService {
     }
 
     const prompt = [
-      '다음은 제주 빈집/건물 사진입니다.',
-      '어르신 자산주의 활용 추천을 JSON으로만 반환해주세요.',
-      'JSON schema: {"recommendation":"string","reason":"string","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER","detectedAreaSqm":number|null}',
-      `주소 참고: ${address ?? '미제공'}`,
+      '다음은 제주 빈집/건물 사진과 위치 정보입니다.',
+      '어르신이 이해하기 쉬운 한국어로 매물 분석을 작성하세요.',
+      '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
+      'JSON schema:',
+      '{"strengthSummary":"string","recommendedDirections":["string"],"recommendation":"string","recommendationReason":"string","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null}',
+      '출력 규칙:',
+      '- strengthSummary: 한 줄 강점 요약(15~45자)',
+      '- recommendedDirections: 2~4개 운영 방향',
+      '- recommendation: 2~4문장 설명',
+      '- recommendationReason: 추천 근거 한 줄',
+      '입력 정보:',
+      `- 주소: ${context.address ?? '미제공'}`,
+      `- 읍면동: ${context.eupMyeonDong ?? '미제공'}`,
+      `- 건물유형(기입값): ${context.detectedAssetType ?? '미제공'}`,
+      `- 면적(기입값): ${context.detectedAreaSqm ?? '미제공'}`,
+      `- 층수(기입값): ${context.detectedFloorCount ?? '미제공'}`,
+      `- 마당(기입값): ${
+        context.hasYard == null ? '미제공' : context.hasYard ? '있음' : '없음'
+      }`,
+      `- 주차(기입값): ${
+        context.hasParking == null ? '미제공' : context.hasParking ? '가능' : '불가'
+      }`,
+      `- 주변 관광지: ${
+        context.nearbyAttractions.length > 0
+          ? context.nearbyAttractions
+              .map((item) => `${item.name}(${item.distanceText ?? '거리확인필요'})`)
+              .join(', ')
+          : '미제공'
+      }`,
     ].join('\n');
 
     const endpoint = `${geminiBaseUrl}/v1beta/models/${geminiModel}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
@@ -1027,40 +1385,275 @@ export class ApplicationsService {
       return null;
     }
 
-    try {
-      const parsed = JSON.parse(text) as {
-        recommendation?: string;
-        reason?: string;
-        detectedAssetType?: string;
-        detectedAreaSqm?: number | null;
-      };
-      if (!parsed.recommendation) {
-        return null;
-      }
-
-      return {
-        recommendation: parsed.recommendation,
-        reason: parsed.reason ?? null,
-        detectedAssetType: this.toAssetType(parsed.detectedAssetType),
-        detectedAreaSqm:
-          typeof parsed.detectedAreaSqm === 'number' && parsed.detectedAreaSqm > 0
-            ? Math.round(parsed.detectedAreaSqm)
-            : null,
-      };
-    } catch {
+    const parsed = this.parseGeminiJson(text);
+    if (!parsed) {
       return {
         recommendation: text.slice(0, 500),
         reason: null,
         detectedAssetType: null,
         detectedAreaSqm: null,
+        detectedFloorCount: null,
+        hasYard: null,
+        hasParking: null,
+        strengthSummary: null,
+        recommendedDirections: [],
       };
     }
+
+    const recommendation =
+      typeof parsed.recommendation === 'string' ? parsed.recommendation.trim() : '';
+    if (!recommendation) {
+      return null;
+    }
+
+    const directions =
+      Array.isArray(parsed.recommendedDirections) && parsed.recommendedDirections.length > 0
+        ? parsed.recommendedDirections
+            .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+            .slice(0, 4)
+        : [];
+
+    return {
+      recommendation,
+      reason:
+        typeof parsed.recommendationReason === 'string'
+          ? parsed.recommendationReason.trim()
+          : typeof parsed.reason === 'string'
+            ? parsed.reason.trim()
+            : null,
+      detectedAssetType: this.toAssetType(
+        typeof parsed.detectedAssetType === 'string' ? parsed.detectedAssetType : undefined,
+      ),
+      detectedAreaSqm: this.toPositiveInt(parsed.detectedAreaSqm),
+      detectedFloorCount: this.toPositiveInt(parsed.detectedFloorCount),
+      hasYard: this.coerceBoolean(parsed.hasYard),
+      hasParking: this.coerceBoolean(parsed.hasParking),
+      strengthSummary:
+        typeof parsed.strengthSummary === 'string' ? parsed.strengthSummary.trim() : null,
+      recommendedDirections: directions,
+    };
+  }
+
+  private buildRuleBasedRecommendation(result: HouseAutoFillResult): {
+    strengthSummary: string;
+    recommendedDirections: string[];
+    recommendation: string;
+    recommendationReason: string;
+  } {
+    const directions = new Set<string>();
+    const nearest = result.nearbyAttractions[0];
+    const nearTourSpot =
+      nearest?.distanceMeters != null ? nearest.distanceMeters <= 1500 : false;
+
+    if (result.hasYard) {
+      directions.add('게스트하우스/감성숙소 운영');
+      directions.add('작가·창작자 작업실 임대');
+    }
+
+    if (result.detectedAreaSqm != null && result.detectedAreaSqm <= 66) {
+      directions.add('1인 장기임대');
+      directions.add('재택근무자 대상 한 달 살기');
+      directions.add('소규모 공방 운영');
+    }
+
+    if (nearTourSpot) {
+      directions.add('에어비앤비형 단기임대');
+      directions.add('카페·소품샵 전환');
+      directions.add('웰니스 프로그램 공간');
+    }
+
+    if (result.detectedAssetType === AssetType.FIELD) {
+      directions.add('텃밭 체험형 농촌 프로그램');
+    }
+
+    if (directions.size === 0) {
+      directions.add('장기 거주형 임대');
+      directions.add('로컬 생활형 소규모 창업 공간');
+    }
+
+    const directionList = Array.from(directions).slice(0, 4);
+    const location = result.eupMyeonDong ?? (result.address ? this.extractEupMyeonDong(result.address) : null);
+    const locationLabel = location ?? '제주 지역';
+    const attractionLabel =
+      nearest && nearest.distanceText
+        ? `${nearest.name} ${nearest.distanceText}`
+        : nearest
+          ? `${nearest.name} 인근`
+          : null;
+
+    const strengthSummary = attractionLabel
+      ? `${locationLabel} ${attractionLabel}로 접근성 좋은 매물`
+      : `${locationLabel} 조용한 생활권의 활용도 높은 매물`;
+
+    const recommendation = [
+      result.hasYard
+        ? '마당이 있어 감성 숙소나 작업실 형태로 구성하기 좋은 구조입니다.'
+        : '유지보수 부담이 비교적 적어 임대 운영을 시작하기 수월합니다.',
+      nearTourSpot
+        ? '관광지 접근성이 좋아 단기 체류 수요를 노린 운영이 유리합니다.'
+        : '생활권 중심 수요를 겨냥한 장기임대 운영이 안정적입니다.',
+      `추천 운영 방향은 ${directionList.join(', ')} 입니다.`,
+      '직접 운영이 부담되면 임대 형태로 시작해도 꾸준한 수익화를 기대할 수 있습니다.',
+    ].join(' ');
+
+    const recommendationReason = attractionLabel
+      ? `${attractionLabel} 접근성과 현장 특성을 기준으로 추천했습니다.`
+      : '입력된 위치/면적/공간 특성을 기반으로 추천했습니다.';
+
+    return {
+      strengthSummary,
+      recommendedDirections: directionList,
+      recommendation,
+      recommendationReason,
+    };
+  }
+
+  private buildAnalysisNarrative(result: HouseAutoFillResult): string {
+    const location = result.eupMyeonDong ?? result.address ?? '위치 확인 필요';
+    const nearestAttraction = result.nearbyAttractions[0];
+    const attractionText = nearestAttraction
+      ? nearestAttraction.distanceText
+        ? `${nearestAttraction.name} ${nearestAttraction.distanceText}`
+        : `${nearestAttraction.name} 인근`
+      : '주변 관광지 확인 필요';
+    const areaText = result.detectedAreaSqm ? `${result.detectedAreaSqm}㎡` : '확인 필요';
+    const floorText = result.detectedFloorCount ? `${result.detectedFloorCount}층` : '확인 필요';
+    const yardText =
+      result.hasYard == null ? '확인 필요' : result.hasYard ? '있음' : '없음';
+    const parkingText =
+      result.hasParking == null ? '확인 필요' : result.hasParking ? '가능' : '불가';
+    const strength = result.strengthSummary ?? '생활권 접근성과 공간 활용성이 좋은 매물';
+    const directions =
+      result.recommendedDirections.length > 0
+        ? result.recommendedDirections.join(', ')
+        : '장기 임대 또는 소규모 창업 공간 활용';
+    const recommendation =
+      result.recommendation ??
+      '직접 운영이 부담되면 임대 중심으로 시작해도 꾸준한 수익화를 기대할 수 있습니다.';
+
+    return [
+      `매물 분석`,
+      `위치: ${location}`,
+      `관광지 거리: ${attractionText}`,
+      `면적: ${areaText}`,
+      `층수: ${floorText}`,
+      `마당: ${yardText}`,
+      `주차: ${parkingText}`,
+      `이 집의 강점: ${strength}`,
+      `추천 방향: ${directions}`,
+      recommendation,
+    ].join('\n');
+  }
+
+  private extractEupMyeonDong(address: string | null): string | null {
+    if (!address) {
+      return null;
+    }
+
+    const tokens = address
+      .replace(/,/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0);
+
+    const match = tokens.find((token) => /[가-힣0-9]+(읍|면|동|리|가)$/.test(token));
+    return match ?? null;
+  }
+
+  private formatDistance(distanceMeters: number | null): string | null {
+    if (distanceMeters == null || distanceMeters < 0) {
+      return null;
+    }
+    if (distanceMeters < 1000) {
+      return `${distanceMeters}m`;
+    }
+    return `${(distanceMeters / 1000).toFixed(1)}km`;
+  }
+
+  private toPositiveInt(value: unknown): number | null {
+    const normalized =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+          ? Number(value)
+          : Number.NaN;
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+      return null;
+    }
+    return Math.round(normalized);
+  }
+
+  private coerceBoolean(value: unknown): boolean | null {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (value === 1) return true;
+      if (value === 0) return false;
+      return null;
+    }
+    if (typeof value === 'string') {
+      const lower = value.trim().toLowerCase();
+      if (['true', 'yes', 'y', '1', '있음', '가능'].includes(lower)) return true;
+      if (['false', 'no', 'n', '0', '없음', '불가'].includes(lower)) return false;
+    }
+    return null;
+  }
+
+  private parseGeminiJson(text: string): Record<string, unknown> | null {
+    const tryParse = (raw: string): Record<string, unknown> | null => {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        return null;
+      }
+      return null;
+    };
+
+    const trimmed = text.trim();
+    const parsedDirect = tryParse(trimmed);
+    if (parsedDirect) {
+      return parsedDirect;
+    }
+
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+    if (fenced) {
+      const parsedFenced = tryParse(fenced.trim());
+      if (parsedFenced) {
+        return parsedFenced;
+      }
+    }
+
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return tryParse(trimmed.slice(firstBrace, lastBrace + 1));
+    }
+
+    return null;
   }
 
   private async fetchImageInlineData(
     url: string,
   ): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
     try {
+      const dataUrlMatch = url.match(/^data:(.+?);base64,(.+)$/);
+      if (dataUrlMatch) {
+        const [, mimeType, base64] = dataUrlMatch;
+        if (!base64 || base64.length === 0) {
+          return null;
+        }
+        return {
+          inline_data: {
+            mime_type: mimeType || 'image/jpeg',
+            data: base64,
+          },
+        };
+      }
+
       const response = await fetch(url);
       if (!response.ok) {
         return null;
@@ -1080,10 +1673,11 @@ export class ApplicationsService {
 
   private toAssetType(value: string | undefined): AssetType | null {
     if (!value) return null;
-    if (value === AssetType.EMPTY_HOUSE) return AssetType.EMPTY_HOUSE;
-    if (value === AssetType.WAREHOUSE) return AssetType.WAREHOUSE;
-    if (value === AssetType.FIELD) return AssetType.FIELD;
-    if (value === AssetType.OTHER) return AssetType.OTHER;
+    const upper = value.toUpperCase();
+    if (upper === AssetType.EMPTY_HOUSE) return AssetType.EMPTY_HOUSE;
+    if (upper === AssetType.WAREHOUSE) return AssetType.WAREHOUSE;
+    if (upper === AssetType.FIELD) return AssetType.FIELD;
+    if (upper === AssetType.OTHER) return AssetType.OTHER;
     return null;
   }
 

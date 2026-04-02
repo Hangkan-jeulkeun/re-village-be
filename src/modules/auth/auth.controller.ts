@@ -15,7 +15,6 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
-import { SignupDto } from './dto/signup.dto';
 import { Request } from 'express';
 
 interface RefreshRequestUser {
@@ -26,13 +25,6 @@ interface RefreshRequestUser {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @Post('signup')
-  @ApiOperation({ summary: '회원가입' })
-  @ApiResponse({ status: 201, description: '회원가입 성공 (JWT 토큰 반환)' })
-  signup(@Body() dto: SignupDto) {
-    return this.authService.signup(dto);
-  }
 
   @Post('login')
   @ApiOperation({ summary: '로그인' })

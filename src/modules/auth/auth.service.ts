@@ -1,16 +1,13 @@
 import {
-  BadRequestException,
   Injectable,
-  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, User, UserRole } from '@prisma/client';
+import { User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
-import { SignupDto } from './dto/signup.dto';
 
 export interface TokenResponse {
   accessToken: string;
@@ -34,22 +31,6 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
   ) {}
-
-  async signup(dto: SignupDto): Promise<{ user: UserResponse } & TokenResponse> {
-    const exists = await this.prisma.user.findUnique({ where: { email: dto.email } });
-    if (exists) {
-      throw new BadRequestException('이미 가입된 이메일입니다.');
-    }
-
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.createUser(dto, passwordHash);
-
-    const tokens = await this.generateTokens(user.id, user.email, user.role);
-    return {
-      user: this.serializeUser(user),
-      ...tokens,
-    };
-  }
 
   async login(dto: LoginDto): Promise<{ user: UserResponse } & TokenResponse> {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
@@ -115,28 +96,5 @@ export class AuthService {
     };
   }
 
-  private async createUser(dto: SignupDto, passwordHash: string): Promise<User> {
-    try {
-      return await this.prisma.user.create({
-        data: {
-          email: dto.email,
-          passwordHash,
-          name: dto.name,
-          phone: dto.phone,
-          role: dto.role ?? UserRole.YOUTH,
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2021'
-      ) {
-        throw new ServiceUnavailableException(
-          '데이터베이스 스키마가 준비되지 않았습니다. 관리자에게 문의하세요.',
-        );
-      }
-
-      throw error;
-    }
-  }
+  // 신청 접수 시 자동 생성된 계정 로그인만 지원
 }

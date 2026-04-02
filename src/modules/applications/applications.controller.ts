@@ -2,19 +2,27 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   Param,
   Patch,
   Post,
   Query,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
+  BadRequestException,
 } from '@nestjs/common';
 import {
+  ApiBody,
   ApiBearerAuth,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { UserRole } from '@prisma/client';
+import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -44,8 +52,70 @@ export class ApplicationsController {
 
   @Post()
   @ApiOperation({ summary: '신청 접수 (회원가입 없이 이름/전화번호 기반)' })
-  create(@Body() dto: QuickApplicationDto) {
-    return this.applicationsService.createQuick(dto);
+  @ApiConsumes('application/json', 'multipart/form-data')
+  @ApiBody({
+    description:
+      'JSON 또는 multipart/form-data 지원. multipart 사용 시 일반 필드는 그대로 넣고, 사진은 photos, 서류는 documents 필드에 파일 첨부하세요.',
+    schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', example: '홍길동' },
+        phone: { type: 'string', example: '010-1234-5678' },
+        email: { type: 'string', example: 'owner@example.com' },
+        address: { type: 'string', example: '제주특별자치도 서귀포시 천지동' },
+        assetType: { type: 'string', example: 'EMPTY_HOUSE' },
+        areaSqm: { type: 'number', example: 72 },
+        floorCount: { type: 'number', example: 1 },
+        hasYard: { type: 'boolean', example: true },
+        hasParking: { type: 'boolean', example: true },
+        notes: { type: 'string', example: '건물 관련 추가 설명' },
+        payload: {
+          type: 'string',
+          example:
+            '{"name":"홍길동","phone":"010-1234-5678","address":"제주특별자치도 서귀포시 천지동"}',
+          description:
+            '선택. multipart에서 JSON 문자열로 전달 가능. payload와 개별 필드가 겹치면 개별 필드 우선',
+        },
+        photos: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+        documents: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+      },
+    },
+  })
+  @UseInterceptors(AnyFilesInterceptor())
+  create(
+    @Body() rawBody: Record<string, unknown>,
+    @UploadedFiles() uploadedFiles: Express.Multer.File[] = [],
+    @Headers('content-type') contentType?: string,
+  ) {
+    const dto = this.toQuickApplicationDto(rawBody);
+    const files = this.groupFiles(uploadedFiles);
+    return this.applicationsService.createQuick(dto, files, contentType);
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '내 신청 목록 조회 (액세스 토큰 기반)' })
+  myApplications(@CurrentUser() user: AuthUser) {
+    return this.applicationsService.findMyApplicationsByToken(user.id);
+  }
+
+  @Get(':id/analysis')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '내 신청 건 AI 매물 분석 (액세스 토큰 기반)' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  analyzeMyApplication(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.applicationsService.analyzeMyApplication(user.id, id, user.role);
   }
 
   @Post('lookup/request-code')
@@ -124,5 +194,44 @@ export class ApplicationsController {
     @Body() dto: UpdateStatusDto,
   ) {
     return this.applicationsService.updateStatus(id, dto);
+  }
+
+  private toQuickApplicationDto(rawBody: Record<string, unknown>): QuickApplicationDto {
+    const payloadRaw = typeof rawBody.payload === 'string' ? rawBody.payload : undefined;
+    let payloadObject: Record<string, unknown> = {};
+
+    if (payloadRaw) {
+      try {
+        const parsed = JSON.parse(payloadRaw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          payloadObject = parsed as Record<string, unknown>;
+        } else {
+          throw new BadRequestException('payload는 JSON 객체 문자열이어야 합니다.');
+        }
+      } catch {
+        throw new BadRequestException('payload JSON 파싱에 실패했습니다.');
+      }
+    }
+
+    const merged = {
+      ...payloadObject,
+      ...rawBody,
+    };
+    delete merged.payload;
+
+    return merged as unknown as QuickApplicationDto;
+  }
+
+  private groupFiles(files: Express.Multer.File[]) {
+    const photos = files.filter((file) => file.fieldname === 'photos');
+    const documents = files.filter((file) => file.fieldname === 'documents');
+
+    if (files.length > 0 && photos.length === 0 && documents.length === 0) {
+      throw new BadRequestException(
+        '파일 필드명은 photos 또는 documents만 사용할 수 있습니다.',
+      );
+    }
+
+    return { photos, documents };
   }
 }

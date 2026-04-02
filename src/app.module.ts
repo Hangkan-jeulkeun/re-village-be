@@ -8,7 +8,6 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
 import { AssetsModule } from './modules/assets/assets.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { FilesModule } from './modules/files/files.module';
 
 @Module({
   imports: [
@@ -20,7 +19,6 @@ import { FilesModule } from './modules/files/files.module';
     AuthModule,
     ApplicationsModule,
     AssetsModule,
-    FilesModule,
   ],
 })
 export class AppModule {}
