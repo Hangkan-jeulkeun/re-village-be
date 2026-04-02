@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  Get,
   Post,
   UploadedFile,
   UseGuards,
@@ -52,11 +51,5 @@ export class FilesController {
     @Body() body: UploadFileBody,
   ) {
     return this.filesService.uploadFile(userId, file, body.refType, body.refId);
-  }
-
-  @Get('me')
-  @ApiOperation({ summary: '내 업로드 파일 목록 조회' })
-  findMine(@CurrentUser('id') userId: string) {
-    return this.filesService.findMyFiles(userId);
   }
 }

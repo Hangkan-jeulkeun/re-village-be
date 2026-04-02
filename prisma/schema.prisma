@@ -28,9 +28,11 @@ enum AssetStatus {
 }
 
 enum ApplicationStatus {
-  SUBMITTED
+  RECEIVED
   REVIEWING
-  APPROVED
+  REMODELING
+  LEASING
+  COMPLETED
   REJECTED
 }
 
@@ -128,7 +130,7 @@ model Application {
   businessIdea     String            @map("business_idea")
   businessType     String            @map("business_type")
   desiredStartDate DateTime          @map("desired_start_date") @db.Date
-  status           ApplicationStatus @default(SUBMITTED)
+  status           ApplicationStatus @default(RECEIVED)
   rejectReason     String?           @map("reject_reason")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
