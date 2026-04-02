@@ -21,6 +21,9 @@ spec:
         envFrom:
         - secretRef:
             name: app-db-secret
+        - secretRef:
+            name: app-ai-secret
+            optional: true
         ports:
         - containerPort: 8080
         volumeMounts:

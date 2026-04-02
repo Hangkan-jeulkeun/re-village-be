@@ -33,9 +33,9 @@ bunx prisma migrate deploy
 bun run db:seed
 ```
 
-## 4) AI/GPS API Key 주입 (app-db-secret)
+## 4) AI/GPS API Key 주입 (app-ai-secret)
 
-`app-db-secret`에 아래 값을 넣어주세요.
+`app-db-secret`는 DB 연결 전용으로 유지하고, AI/GPS 키는 별도 `app-ai-secret`으로 관리하세요.
 
 - `GPS_API_KEY`
 - `GPS_GEOCODE_URL` (기본값: `https://maps.googleapis.com/maps/api/geocode/json`)
@@ -47,14 +47,12 @@ bun run db:seed
 예시:
 
 ```bash
-kubectl patch secret app-db-secret -n goormthon-6 --type merge -p '{
-  "stringData": {
-    "GPS_API_KEY": "YOUR_GPS_KEY",
-    "GPS_GEOCODE_URL": "https://maps.googleapis.com/maps/api/geocode/json",
-    "GPS_REVERSE_GEOCODE_URL": "https://maps.googleapis.com/maps/api/geocode/json",
-    "GEMINI_API_KEY": "YOUR_GEMINI_KEY",
-    "GEMINI_MODEL": "gemini-2.5-flash",
-    "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com"
-  }
-}'
+kubectl create secret generic app-ai-secret -n goormthon-6 \
+  --from-literal=GPS_API_KEY='YOUR_GPS_KEY' \
+  --from-literal=GPS_GEOCODE_URL='https://maps.googleapis.com/maps/api/geocode/json' \
+  --from-literal=GPS_REVERSE_GEOCODE_URL='https://maps.googleapis.com/maps/api/geocode/json' \
+  --from-literal=GEMINI_API_KEY='YOUR_GEMINI_KEY' \
+  --from-literal=GEMINI_MODEL='gemini-2.5-flash' \
+  --from-literal=GEMINI_BASE_URL='https://generativelanguage.googleapis.com' \
+  --dry-run=client -o yaml | kubectl apply -f -
 ```
