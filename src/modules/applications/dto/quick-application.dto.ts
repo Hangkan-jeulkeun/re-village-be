@@ -105,6 +105,15 @@ export class QuickApplicationDto {
   @Matches(/^[+0-9][0-9-]{7,19}$/)
   phone!: string;
 
+  @ApiProperty({
+    example: '123456',
+    description: '전화번호 SMS 인증코드 (6자리)',
+  })
+  @IsString()
+  @Length(6, 6)
+  @Matches(/^\d{6}$/)
+  verificationCode!: string;
+
   @ApiPropertyOptional({ example: 'owner@example.com' })
   @IsOptional()
   @IsEmail()

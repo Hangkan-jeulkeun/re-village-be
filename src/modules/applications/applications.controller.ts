@@ -61,6 +61,7 @@ export class ApplicationsController {
       properties: {
         name: { type: 'string', example: '홍길동' },
         phone: { type: 'string', example: '010-1234-5678' },
+        verificationCode: { type: 'string', example: '123456' },
         email: { type: 'string', example: 'owner@example.com' },
         address: { type: 'string', example: '제주특별자치도 서귀포시 천지동' },
         assetType: { type: 'string', example: 'EMPTY_HOUSE' },
@@ -119,9 +120,15 @@ export class ApplicationsController {
   }
 
   @Post('lookup/request-code')
-  @ApiOperation({ summary: '신청내역 조회용 인증번호 요청' })
+  @ApiOperation({ summary: '인증번호 요청 (조회/신청 공용)' })
   requestLookupCode(@Body() dto: RequestVerificationDto) {
     return this.applicationsService.requestLookupCode(dto);
+  }
+
+  @Post('verification/request-code')
+  @ApiOperation({ summary: '신청용 인증번호 요청 (SMS 발송)' })
+  requestSubmitCode(@Body() dto: RequestVerificationDto) {
+    return this.applicationsService.requestApplyCode(dto);
   }
 
   @Post('lookup/verify')

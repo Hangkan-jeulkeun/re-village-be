@@ -41,6 +41,8 @@ interface VerificationCodeEntry {
   expiresAt: number;
 }
 
+type VerificationPurpose = 'APPLY' | 'LOOKUP';
+
 export interface NearbyAttraction {
   name: string;
   distanceMeters: number | null;
@@ -132,6 +134,7 @@ export class ApplicationsService {
     contentType?: string,
   ) {
     this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
+    this.verifyCode(dto.phone, dto.verificationCode, 'APPLY');
 
     const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
     const applicantName = this.resolveApplicantName(dto);
@@ -263,24 +266,45 @@ export class ApplicationsService {
     }
   }
 
-  requestLookupCode(dto: RequestVerificationDto) {
+  async requestLookupCode(dto: RequestVerificationDto) {
+    return this.requestVerificationCode(dto, 'LOOKUP');
+  }
+
+  async requestApplyCode(dto: RequestVerificationDto) {
+    return this.requestVerificationCode(dto, 'APPLY');
+  }
+
+  private async requestVerificationCode(
+    dto: RequestVerificationDto,
+    purpose: VerificationPurpose,
+  ) {
     const phone = this.normalizePhone(dto.phone);
     const code = this.generateCode();
-    this.verificationCodes.set(phone, {
+    this.verificationCodes.set(this.verificationKey(phone, purpose), {
       code,
       expiresAt: Date.now() + 3 * 60 * 1000,
     });
 
+    const sent = await this.sendVerificationCodeSms(phone, code);
+    const isDevMode = this.configService.get<string>('app.nodeEnv') !== 'production';
+
+    if (!sent && this.isSmsConfigured()) {
+      throw new ServiceUnavailableException(
+        '인증번호 SMS 발송에 실패했습니다. 잠시 후 다시 시도해주세요.',
+      );
+    }
+
     return {
-      message: '인증번호가 발급되었습니다.',
+      message: sent
+        ? '인증번호를 전송했습니다.'
+        : '인증번호가 발급되었습니다. (개발 모드)',
       expiresInSeconds: 180,
-      // 실제 서비스에서는 SMS 발송으로 대체
-      code,
+      ...(isDevMode && !sent ? { code } : {}),
     };
   }
 
   async verifyAndLookup(dto: VerifyCodeDto) {
-    this.verifyCode(dto.phone, dto.code);
+    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
     const phone = this.normalizePhone(dto.phone);
 
     const users = await this.prisma.user.findMany({
@@ -342,7 +366,7 @@ export class ApplicationsService {
   }
 
   async lookupDetail(dto: LookupApplicationDetailDto) {
-    this.verifyCode(dto.phone, dto.code);
+    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
     const phone = this.normalizePhone(dto.phone);
 
     const application = await this.prisma.application.findUnique({
@@ -387,7 +411,7 @@ export class ApplicationsService {
   }
 
   async cancelByPhone(applicationId: string, dto: CancelApplicationDto) {
-    this.verifyCode(dto.phone, dto.code);
+    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
     const phone = this.normalizePhone(dto.phone);
 
     const application = await this.prisma.application.findUnique({
@@ -965,16 +989,25 @@ export class ApplicationsService {
     return String(Math.floor(100000 + Math.random() * 900000));
   }
 
-  private verifyCode(phoneRaw: string, code: string): void {
+  private verificationKey(phone: string, purpose: VerificationPurpose): string {
+    return `${purpose}:${phone}`;
+  }
+
+  private verifyCode(
+    phoneRaw: string,
+    code: string,
+    purpose: VerificationPurpose = 'LOOKUP',
+  ): void {
     const phone = this.normalizePhone(phoneRaw);
-    const current = this.verificationCodes.get(phone);
+    const key = this.verificationKey(phone, purpose);
+    const current = this.verificationCodes.get(key);
 
     if (!current) {
       throw new UnauthorizedException('인증번호를 먼저 요청해주세요.');
     }
 
     if (Date.now() > current.expiresAt) {
-      this.verificationCodes.delete(phone);
+      this.verificationCodes.delete(key);
       throw new UnauthorizedException('인증번호가 만료되었습니다.');
     }
 
@@ -982,7 +1015,63 @@ export class ApplicationsService {
       throw new UnauthorizedException('인증번호가 올바르지 않습니다.');
     }
 
-    this.verificationCodes.delete(phone);
+    this.verificationCodes.delete(key);
+  }
+
+  private isSmsConfigured(): boolean {
+    const baseUrl = this.configService.get<string>('sms.infobipBaseUrl');
+    const apiKey = this.configService.get<string>('sms.infobipApiKey');
+    return Boolean(baseUrl && apiKey);
+  }
+
+  private async sendVerificationCodeSms(
+    toPhone: string,
+    code: string,
+  ): Promise<boolean> {
+    const baseUrlRaw = this.configService.get<string>('sms.infobipBaseUrl');
+    const apiKey = this.configService.get<string>('sms.infobipApiKey');
+    const sender = this.configService.get<string>('sms.infobipSender') ?? 'ServiceSMS';
+    const timeoutMs = this.configService.get<number>('sms.timeoutMs') ?? 5000;
+
+    if (!baseUrlRaw || !apiKey) {
+      return false;
+    }
+
+    const baseUrl = baseUrlRaw.replace(/\/+$/, '');
+    const endpoint = `${baseUrl}/sms/3/messages`;
+    const message = `[제주 리-빌리지] 인증번호 ${code} (3분 유효)`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `App ${apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [
+            {
+              sender,
+              destinations: [{ to: toPhone }],
+              content: {
+                text: message,
+              },
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
+
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private extractFilename(url: string): string {
