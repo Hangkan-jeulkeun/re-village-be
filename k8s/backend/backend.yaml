@@ -21,14 +21,13 @@ spec:
         - |
           set -eu
           echo "[init] prisma db push start"
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "[init] DATABASE_URL is missing"
+          fi
           retry=0
           until bunx prisma db push; do
             retry=$((retry + 1))
-            if [ "$retry" -ge 24 ]; then
-              echo "[init] prisma db push failed after ${retry} attempts"
-              exit 1
-            fi
-            echo "[init] prisma db push failed, retry ${retry}/24 in 5s"
+            echo "[init] prisma db push failed, retry ${retry} in 5s"
             sleep 5
           done
           echo "[init] prisma db push success"
