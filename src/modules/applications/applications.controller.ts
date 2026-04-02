@@ -32,8 +32,6 @@ import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
-import { CancelApplicationDto } from './dto/cancel-application.dto';
-import { LookupApplicationDetailDto } from './dto/lookup-application-detail.dto';
 import { QuickApplicationDto } from './dto/quick-application.dto';
 import { RequestVerificationDto } from './dto/request-verification.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
@@ -119,6 +117,18 @@ export class ApplicationsController {
     return this.applicationsService.analyzeMyApplication(user.id, id, user.role);
   }
 
+  @Get('me/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '내 신청 건 상세 조회 (액세스 토큰 기반)' })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  myApplicationDetail(
+    @Param('id', ParseUuidPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.applicationsService.getMyApplicationDetail(user.id, id, user.role);
+  }
+
   @Post('lookup/request-code')
   @ApiOperation({ summary: '인증번호 요청 (조회/신청 공용)' })
   requestLookupCode(@Body() dto: RequestVerificationDto) {
@@ -138,25 +148,21 @@ export class ApplicationsController {
   }
 
   @Post('lookup/verify')
-  @ApiOperation({ summary: '인증번호 검증 후 신청내역 조회' })
+  @ApiOperation({ summary: '인증번호 검증 후 토큰 발급 + 신청내역 조회' })
   verifyAndLookup(@Body() dto: VerifyCodeDto) {
     return this.applicationsService.verifyAndLookup(dto);
   }
 
-  @Post('lookup/detail')
-  @ApiOperation({ summary: '인증번호 검증 후 특정 신청 상세 조회' })
-  lookupDetail(@Body() dto: LookupApplicationDetailDto) {
-    return this.applicationsService.lookupDetail(dto);
-  }
-
   @Patch(':id/cancel')
-  @ApiOperation({ summary: '신청 취소 (전화번호 인증 기반)' })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '신청 취소 (액세스 토큰 기반)' })
   @ApiParam({ name: 'id', format: 'uuid' })
-  cancel(
+  cancelMyApplication(
     @Param('id', ParseUuidPipe) id: string,
-    @Body() dto: CancelApplicationDto,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.applicationsService.cancelByPhone(id, dto);
+    return this.applicationsService.cancelMyApplication(user.id, id, user.role);
   }
 
   @Get('admin/summary')

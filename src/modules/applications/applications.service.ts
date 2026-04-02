@@ -26,9 +26,7 @@ import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
-import { CancelApplicationDto } from './dto/cancel-application.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
-import { LookupApplicationDetailDto } from './dto/lookup-application-detail.dto';
 import {
   ApplicationDocumentType,
   QuickApplicationDto,
@@ -39,6 +37,7 @@ import { VerifyCodeDto } from './dto/verify-code.dto';
 
 interface VerificationCodeEntry {
   code: string;
+  name: string;
   expiresAt: number;
 }
 
@@ -142,10 +141,10 @@ export class ApplicationsService {
     contentType?: string,
   ) {
     this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
-    this.verifyCode(dto.phone, dto.verificationCode, 'APPLY');
+    const applicantName = this.resolveApplicantName(dto);
+    this.verifyCode(dto.phone, dto.verificationCode, 'APPLY', true, applicantName);
 
     const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
-    const applicantName = this.resolveApplicantName(dto);
     const applicant = await this.findOrCreateApplicant(dto);
     const autoFilled = await this.resolveAutoFillFromInput({
       address: dto.address ?? dto.detectedAddress,
@@ -282,12 +281,9 @@ export class ApplicationsService {
     return this.requestVerificationCode(dto, 'APPLY');
   }
 
-  verifyApplyCode(dto: VerifyCodeDto) {
-    this.verifyCode(dto.phone, dto.code, 'APPLY', false);
-    return {
-      verified: true,
-      message: '인증번호가 확인되었습니다.',
-    };
+  async verifyApplyCode(dto: VerifyCodeDto) {
+    this.verifyCode(dto.phone, dto.code, 'APPLY', false, dto.name);
+    return this.issueSmsVerifiedTokens(dto.name, dto.phone);
   }
 
   private async requestVerificationCode(
@@ -295,9 +291,11 @@ export class ApplicationsService {
     purpose: VerificationPurpose,
   ) {
     const phone = this.normalizePhone(dto.phone);
+    const name = dto.name.trim();
     const code = this.generateCode();
     this.verificationCodes.set(this.verificationKey(phone, purpose), {
       code,
+      name,
       expiresAt: Date.now() + 3 * 60 * 1000,
     });
 
@@ -329,8 +327,10 @@ export class ApplicationsService {
   }
 
   async verifyAndLookup(dto: VerifyCodeDto) {
-    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
+    this.verifyCode(dto.phone, dto.code, 'LOOKUP', true, dto.name);
     const phone = this.normalizePhone(dto.phone);
+    const user = await this.findOrCreateSmsUser(dto.name, phone);
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
 
     const users = await this.prisma.user.findMany({
       where: { phone },
@@ -380,6 +380,13 @@ export class ApplicationsService {
     const rejected = decorated.filter((item) => item.status === ApplicationStatus.REJECTED);
 
     return {
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+      },
+      ...tokens,
       total: decorated.length,
       progressCount: inProgress.length,
       completedCount: completed.length,
@@ -390,12 +397,13 @@ export class ApplicationsService {
     };
   }
 
-  async lookupDetail(dto: LookupApplicationDetailDto) {
-    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
-    const phone = this.normalizePhone(dto.phone);
-
+  async getMyApplicationDetail(
+    userId: string,
+    applicationId: string,
+    role: UserRole,
+  ) {
     const application = await this.prisma.application.findUnique({
-      where: { id: dto.applicationId },
+      where: { id: applicationId },
       include: {
         applicant: {
           select: { id: true, name: true, phone: true, email: true },
@@ -415,7 +423,7 @@ export class ApplicationsService {
       throw new NotFoundException('신청서를 찾을 수 없습니다.');
     }
 
-    if (application.applicant.phone !== phone) {
+    if (application.applicantId !== userId && role !== UserRole.ADMIN) {
       throw new ForbiddenException('본인 신청 건만 조회할 수 있습니다.');
     }
 
@@ -435,15 +443,16 @@ export class ApplicationsService {
     };
   }
 
-  async cancelByPhone(applicationId: string, dto: CancelApplicationDto) {
-    this.verifyCode(dto.phone, dto.code, 'LOOKUP');
-    const phone = this.normalizePhone(dto.phone);
-
+  async cancelMyApplication(
+    userId: string,
+    applicationId: string,
+    role: UserRole,
+  ) {
     const application = await this.prisma.application.findUnique({
       where: { id: applicationId },
       include: {
         applicant: {
-          select: { id: true, phone: true },
+          select: { id: true },
         },
       },
     });
@@ -452,7 +461,7 @@ export class ApplicationsService {
       throw new NotFoundException('신청서를 찾을 수 없습니다.');
     }
 
-    if (application.applicant.phone !== phone) {
+    if (application.applicantId !== userId && role !== UserRole.ADMIN) {
       throw new ForbiddenException('본인 신청 건만 취소할 수 있습니다.');
     }
 
@@ -991,6 +1000,55 @@ export class ApplicationsService {
     return `data:${mimeType};base64,${base64}`;
   }
 
+  private async issueSmsVerifiedTokens(nameRaw: string, phoneRaw: string) {
+    const normalizedName = nameRaw.trim();
+    const phone = this.normalizePhone(phoneRaw);
+    const user = await this.findOrCreateSmsUser(normalizedName, phone);
+    const tokens = await this.generateTokens(user.id, user.email, user.role);
+
+    return {
+      verified: true,
+      message: '인증번호가 확인되었습니다.',
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        role: user.role,
+      },
+      ...tokens,
+    };
+  }
+
+  private async findOrCreateSmsUser(nameRaw: string, normalizedPhone: string) {
+    const name = nameRaw.trim();
+    const existing = await this.prisma.user.findFirst({
+      where: { phone: normalizedPhone },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (existing) {
+      return this.prisma.user.update({
+        where: { id: existing.id },
+        data: {
+          name,
+        },
+      });
+    }
+
+    const email = `sms-${normalizedPhone.replace(/[^0-9]/g, '')}-${uuidv4()}@placeholder.local`;
+    const passwordHash = await bcrypt.hash(uuidv4(), 10);
+
+    return this.prisma.user.create({
+      data: {
+        name,
+        phone: normalizedPhone,
+        email,
+        passwordHash,
+        role: UserRole.ELDER,
+      },
+    });
+  }
+
   private normalizePhone(phone: string): string {
     const trimmed = phone.trim();
     const compact = trimmed.replace(/[^0-9+]/g, '');
@@ -1023,6 +1081,7 @@ export class ApplicationsService {
     code: string,
     purpose: VerificationPurpose = 'LOOKUP',
     consume = true,
+    expectedName?: string,
   ): void {
     const phone = this.normalizePhone(phoneRaw);
     const key = this.verificationKey(phone, purpose);
@@ -1039,6 +1098,10 @@ export class ApplicationsService {
 
     if (current.code !== code) {
       throw new UnauthorizedException('인증번호가 올바르지 않습니다.');
+    }
+
+    if (expectedName && current.name !== expectedName.trim()) {
+      throw new UnauthorizedException('이름 또는 인증번호가 올바르지 않습니다.');
     }
 
     if (consume) {
