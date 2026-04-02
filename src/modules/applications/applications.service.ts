@@ -1,10 +1,15 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtService } from '@nestjs/jwt';
 import {
   ApplicationStatus,
   AssetType,
@@ -46,7 +51,11 @@ type ApplicationListItem = Prisma.ApplicationGetPayload<{
 export class ApplicationsService {
   private readonly verificationCodes = new Map<string, VerificationCodeEntry>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async create(applicantId: string, dto: CreateApplicationDto) {
     const asset = await this.prisma.asset.findUnique({ where: { id: dto.assetId } });
@@ -90,10 +99,16 @@ export class ApplicationsService {
     const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
 
     await this.attachDocuments(applicant.id, application.id, dto);
+    const tokens = await this.generateTokens(
+      application.applicant.id,
+      application.applicant.email,
+      application.applicant.role,
+    );
 
     return {
       ...application,
       statusLabel: this.statusLabel(application.status),
+      ...tokens,
     };
   }
 
@@ -115,7 +130,7 @@ export class ApplicationsService {
         },
         include: {
           applicant: {
-            select: { id: true, name: true, phone: true, email: true },
+            select: { id: true, name: true, phone: true, email: true, role: true },
           },
           asset: {
             include: {
@@ -127,16 +142,7 @@ export class ApplicationsService {
         },
       });
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2003'
-      ) {
-        throw new BadRequestException(
-          '신청 자산 정보 생성 중 문제가 발생했습니다. 다시 시도해주세요.',
-        );
-      }
-
-      throw error;
+      this.throwPrismaException(error, 'APPLICATION_CREATE');
     }
   }
 
@@ -593,27 +599,35 @@ export class ApplicationsService {
     });
 
     if (existing) {
-      return this.prisma.user.update({
-        where: { id: existing.id },
-        data: {
-          name,
-          ...(dto.email ? { email: dto.email } : {}),
-        },
-      });
+      try {
+        return await this.prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            name,
+            ...(dto.email ? { email: dto.email } : {}),
+          },
+        });
+      } catch (error) {
+        this.throwPrismaException(error, 'APPLICANT_UPDATE');
+      }
     }
 
     const email = dto.email ?? `phone-${phone.replace(/[^0-9]/g, '')}-${uuidv4()}@placeholder.local`;
     const passwordHash = await bcrypt.hash(uuidv4(), 10);
 
-    return this.prisma.user.create({
-      data: {
-        name,
-        phone,
-        email,
-        passwordHash,
-        role: UserRole.ELDER,
-      },
-    });
+    try {
+      return await this.prisma.user.create({
+        data: {
+          name,
+          phone,
+          email,
+          passwordHash,
+          role: UserRole.ELDER,
+        },
+      });
+    } catch (error) {
+      this.throwPrismaException(error, 'APPLICANT_CREATE');
+    }
   }
 
   private async createAssetForQuickApplication(ownerId: string, dto: QuickApplicationDto): Promise<string> {
@@ -621,27 +635,32 @@ export class ApplicationsService {
     const address = dto.address ?? dto.detectedAddress ?? '주소 미입력';
     const assetType = dto.assetType ?? dto.detectedAssetType ?? AssetType.EMPTY_HOUSE;
     const areaSqm = dto.areaSqm ?? dto.detectedAreaSqm;
-    const asset = await this.prisma.asset.create({
-      data: {
-        ownerId,
-        title: `${name} 신청 건`,
-        assetType,
-        address,
-        regionCode: 'JEJU-UNKNOWN',
-        areaSqm,
-        latitude: dto.latitude,
-        longitude: dto.longitude,
-        description: dto.notes,
-        images: {
-          create:
-            dto.photoUrls?.map((url, index) => ({
-              fileUrl: url,
-              sortOrder: index,
-            })) ?? [],
+    let asset;
+    try {
+      asset = await this.prisma.asset.create({
+        data: {
+          ownerId,
+          title: `${name} 신청 건`,
+          assetType,
+          address,
+          regionCode: 'JEJU-UNKNOWN',
+          areaSqm,
+          latitude: dto.latitude,
+          longitude: dto.longitude,
+          description: dto.notes,
+          images: {
+            create:
+              dto.photoUrls?.map((url, index) => ({
+                fileUrl: url,
+                sortOrder: index,
+              })) ?? [],
+          },
         },
-      },
-      select: { id: true },
-    });
+        select: { id: true },
+      });
+    } catch (error) {
+      this.throwPrismaException(error, 'ASSET_CREATE');
+    }
 
     return asset.id;
   }
@@ -653,21 +672,25 @@ export class ApplicationsService {
       return;
     }
 
-    await this.prisma.file.createMany({
-      data: documents.map((document) => {
-        const originalName = this.extractFilename(document.fileUrl);
-        return {
-          uploadedBy: userId,
-          originalName,
-          storedName: originalName,
-          fileUrl: document.fileUrl,
-          mimeType: this.guessMimeType(originalName),
-          fileSizeBytes: 0,
-          refType: `APPLICATION_DOC_${document.type}`,
-          refId: applicationId,
-        };
-      }),
-    });
+    try {
+      await this.prisma.file.createMany({
+        data: documents.map((document) => {
+          const originalName = this.extractFilename(document.fileUrl);
+          return {
+            uploadedBy: userId,
+            originalName,
+            storedName: originalName,
+            fileUrl: document.fileUrl,
+            mimeType: this.guessMimeType(originalName),
+            fileSizeBytes: 0,
+            refType: `APPLICATION_DOC_${document.type}`,
+            refId: applicationId,
+          };
+        }),
+      });
+    } catch (error) {
+      this.throwPrismaException(error, 'DOCUMENT_ATTACH');
+    }
   }
 
   private normalizePhone(phone: string): string {
@@ -799,6 +822,48 @@ export class ApplicationsService {
           }
         : null,
     };
+  }
+
+  private async generateTokens(userId: string, email: string, role: UserRole) {
+    const payload = { sub: userId, email, role };
+    const [accessToken, refreshToken] = await Promise.all([
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
+        expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') ?? '15m',
+      }),
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
+        expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d',
+      }),
+    ]);
+
+    return { accessToken, refreshToken };
+  }
+
+  private throwPrismaException(error: unknown, context: string): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        throw new ConflictException('이미 사용 중인 이메일입니다.');
+      }
+
+      if (error.code === 'P2003') {
+        throw new BadRequestException('신청 데이터 연결에 실패했습니다. 입력값을 확인해주세요.');
+      }
+
+      if (error.code === 'P2021') {
+        throw new ServiceUnavailableException(
+          '데이터베이스 스키마가 최신 상태가 아닙니다. 관리자에게 문의해주세요.',
+        );
+      }
+
+      if (error.code === 'P2025') {
+        throw new NotFoundException('요청한 데이터를 찾을 수 없습니다.');
+      }
+    }
+
+    throw new InternalServerErrorException(
+      `신청 처리 중 오류가 발생했습니다. (${context})`,
+    );
   }
 
   private statusLabel(status: ApplicationStatus): string {
