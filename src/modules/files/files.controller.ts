@@ -3,29 +3,19 @@ import {
   Controller,
   Post,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import {
-  ApiBearerAuth,
   ApiBody,
   ApiConsumes,
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { UploadPublicFileDto } from './dto/upload-public-file.dto';
 import { FilesService } from './files.service';
 
-interface UploadFileBody {
-  refType?: string;
-  refId?: string;
-}
-
 @ApiTags('files')
-@ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard)
 @Controller('files')
 export class FilesController {
   constructor(private readonly filesService: FilesService) {}
@@ -33,23 +23,24 @@ export class FilesController {
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'S3 파일 업로드' })
+  @ApiOperation({ summary: '신청용 파일 업로드 (회원가입 없이 사용 가능)' })
   @ApiBody({
     schema: {
       type: 'object',
       properties: {
         file: { type: 'string', format: 'binary' },
+        name: { type: 'string' },
+        phone: { type: 'string' },
         refType: { type: 'string' },
         refId: { type: 'string' },
       },
-      required: ['file'],
+      required: ['file', 'name', 'phone'],
     },
   })
   upload(
-    @CurrentUser('id') userId: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: UploadFileBody,
+    @Body() body: UploadPublicFileDto,
   ) {
-    return this.filesService.uploadFile(userId, file, body.refType, body.refId);
+    return this.filesService.uploadPublicFile(file, body);
   }
 }

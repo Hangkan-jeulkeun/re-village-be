@@ -41,12 +41,6 @@ export class ApplicationsController {
     return this.applicationsService.createQuick(dto);
   }
 
-  @Post('quick')
-  @ApiOperation({ summary: '간편 신청 생성 (이름/전화번호 기반)' })
-  createQuick(@Body() dto: QuickApplicationDto) {
-    return this.applicationsService.createQuick(dto);
-  }
-
   @Post('lookup/request-code')
   @ApiOperation({ summary: '신청내역 조회용 인증번호 요청' })
   requestLookupCode(@Body() dto: RequestVerificationDto) {

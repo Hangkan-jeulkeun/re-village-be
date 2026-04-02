@@ -8,7 +8,6 @@ import { ApplicationsModule } from './modules/applications/applications.module';
 import { AssetsModule } from './modules/assets/assets.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { FilesModule } from './modules/files/files.module';
-import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -20,7 +19,6 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     AuthModule,
     ApplicationsModule,
     AssetsModule,
-    NotificationsModule,
     FilesModule,
   ],
 })

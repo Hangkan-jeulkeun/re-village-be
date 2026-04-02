@@ -5,8 +5,11 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as bcrypt from 'bcrypt';
+import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { v4 as uuidv4 } from 'uuid';
+import { UploadPublicFileDto } from './dto/upload-public-file.dto';
 
 @Injectable()
 export class FilesService {
@@ -33,6 +36,21 @@ export class FilesService {
   }
 
   async uploadFile(
+    uploadedBy: string,
+    file: Express.Multer.File | undefined,
+    refType?: string,
+    refId?: string,
+  ) {
+    return this.saveUploadedFile(uploadedBy, file, refType, refId);
+  }
+
+  async uploadPublicFile(file: Express.Multer.File | undefined, dto: UploadPublicFileDto) {
+    const phone = this.normalizePhone(dto.phone);
+    const user = await this.findOrCreateUploader(dto.name, phone);
+    return this.saveUploadedFile(user.id, file, dto.refType, dto.refId);
+  }
+
+  private async saveUploadedFile(
     uploadedBy: string,
     file: Express.Multer.File | undefined,
     refType?: string,
@@ -93,5 +111,40 @@ export class FilesService {
     }
 
     return filename.slice(idx);
+  }
+
+  private normalizePhone(phone: string): string {
+    const compact = phone.trim().replace(/[^0-9+]/g, '');
+    if (compact.startsWith('+')) return compact;
+    if (compact.startsWith('0')) return `+82${compact.slice(1)}`;
+    if (compact.startsWith('82')) return `+${compact}`;
+    return `+${compact}`;
+  }
+
+  private async findOrCreateUploader(name: string, phone: string) {
+    const existing = await this.prisma.user.findFirst({
+      where: { phone },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (existing) {
+      return this.prisma.user.update({
+        where: { id: existing.id },
+        data: { name },
+      });
+    }
+
+    const placeholderEmail = `upload-${phone.replace(/[^0-9]/g, '')}-${uuidv4()}@placeholder.local`;
+    const passwordHash = await bcrypt.hash(uuidv4(), 10);
+
+    return this.prisma.user.create({
+      data: {
+        name,
+        phone,
+        email: placeholderEmail,
+        passwordHash,
+        role: UserRole.ELDER,
+      },
+    });
   }
 }
