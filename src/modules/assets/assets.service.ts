@@ -289,6 +289,12 @@ export class AssetsService {
   }
 
   private recommendationByType(assetType: AssetType): string[] {
+    if (assetType === AssetType.STONE_WALL_FIELD_HOUSE) return ['감성숙소', '텃밭 체험', '한 달 살기'];
+    if (assetType === AssetType.STONE_WALL_HOUSE) return ['게스트하우스', '주거', '공방'];
+    if (assetType === AssetType.DEMOLITION_HOUSE) return ['재건축 검토', '리모델링', '장기 임대'];
+    if (assetType === AssetType.NO_STONE_WALL_HOUSE) return ['주거', '카페', '소형 창업'];
+    if (assetType === AssetType.D_SHAPED_HOUSE) return ['중정형 숙소', '복합공간', '공유주택'];
+    if (assetType === AssetType.URBAN_HOUSE_VILLA) return ['도심 임대', '원룸/투룸', '소형 오피스'];
     if (assetType === AssetType.EMPTY_HOUSE) return ['주거', '게스트하우스', '카페'];
     if (assetType === AssetType.WAREHOUSE) return ['공방', '창고형 카페'];
     if (assetType === AssetType.FIELD) return ['농업', '텃밭', '체험농장'];

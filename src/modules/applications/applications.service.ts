@@ -62,6 +62,15 @@ interface QuickApplicationUploadFiles {
   documents?: Express.Multer.File[];
 }
 
+const RANDOM_HOUSE_TYPES: AssetType[] = [
+  AssetType.STONE_WALL_FIELD_HOUSE,
+  AssetType.STONE_WALL_HOUSE,
+  AssetType.DEMOLITION_HOUSE,
+  AssetType.NO_STONE_WALL_HOUSE,
+  AssetType.D_SHAPED_HOUSE,
+  AssetType.URBAN_HOUSE_VILLA,
+];
+
 interface DocumentSource {
   fileUrl: string;
   mimeType?: string;
@@ -882,12 +891,8 @@ export class ApplicationsService {
       pdfExtracted?.address ??
       autoFilled.address ??
       '주소 미입력';
-    const assetType =
-      dto.assetType ??
-      dto.detectedAssetType ??
-      pdfExtracted?.detectedAssetType ??
-      autoFilled.detectedAssetType ??
-      AssetType.EMPTY_HOUSE;
+    // 프론트에서 assetType을 받지 않고, 현재 정책상 랜덤 분류를 사용합니다.
+    const assetType = this.pickRandomHouseAssetType();
     const areaSqm =
       dto.areaSqm ??
       dto.detectedAreaSqm ??
@@ -1438,7 +1443,7 @@ export class ApplicationsService {
       '문서에서 신청 화면 자동입력에 필요한 항목을 추출하세요.',
       '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
       'JSON schema:',
-      '{"address":"string|null","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null,"summary":"string|null"}',
+      '{"address":"string|null","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null,"summary":"string|null"}',
       '규칙:',
       '- 값이 불확실하면 null',
       '- detectedAreaSqm는 제곱미터(m2) 기준 숫자',
@@ -1813,7 +1818,7 @@ export class ApplicationsService {
       '어르신이 이해하기 쉬운 한국어로 매물 분석을 작성하세요.',
       '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
       'JSON schema:',
-      '{"strengthSummary":"string","recommendedDirections":["string"],"recommendation":"string","recommendationReason":"string","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null}',
+      '{"strengthSummary":"string","recommendedDirections":["string"],"recommendation":"string","recommendationReason":"string","detectedAssetType":"STONE_WALL_FIELD_HOUSE|STONE_WALL_HOUSE|DEMOLITION_HOUSE|NO_STONE_WALL_HOUSE|D_SHAPED_HOUSE|URBAN_HOUSE_VILLA|EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null}',
       '출력 규칙:',
       '- strengthSummary: 한 줄 강점 요약(15~45자)',
       '- recommendedDirections: 2~4개 운영 방향',
@@ -2230,12 +2235,34 @@ export class ApplicationsService {
 
   private toAssetType(value: string | undefined): AssetType | null {
     if (!value) return null;
-    const upper = value.toUpperCase();
+    const upper = value.trim().toUpperCase();
+    if (upper === AssetType.STONE_WALL_FIELD_HOUSE) return AssetType.STONE_WALL_FIELD_HOUSE;
+    if (upper === AssetType.STONE_WALL_HOUSE) return AssetType.STONE_WALL_HOUSE;
+    if (upper === AssetType.DEMOLITION_HOUSE) return AssetType.DEMOLITION_HOUSE;
+    if (upper === AssetType.NO_STONE_WALL_HOUSE) return AssetType.NO_STONE_WALL_HOUSE;
+    if (upper === AssetType.D_SHAPED_HOUSE) return AssetType.D_SHAPED_HOUSE;
+    if (upper === AssetType.URBAN_HOUSE_VILLA) return AssetType.URBAN_HOUSE_VILLA;
     if (upper === AssetType.EMPTY_HOUSE) return AssetType.EMPTY_HOUSE;
     if (upper === AssetType.WAREHOUSE) return AssetType.WAREHOUSE;
     if (upper === AssetType.FIELD) return AssetType.FIELD;
     if (upper === AssetType.OTHER) return AssetType.OTHER;
+
+    const normalized = value.replace(/\s+/g, '');
+    if (normalized === '돌담+밭주택') return AssetType.STONE_WALL_FIELD_HOUSE;
+    if (normalized === '돌담주택') return AssetType.STONE_WALL_HOUSE;
+    if (normalized === '철거주택') return AssetType.DEMOLITION_HOUSE;
+    if (normalized === '돌담없는주택') return AssetType.NO_STONE_WALL_HOUSE;
+    if (normalized === 'ㄷ자주택') return AssetType.D_SHAPED_HOUSE;
+    if (normalized === '도심형주택/빌라' || normalized === '도심형주택빌라') {
+      return AssetType.URBAN_HOUSE_VILLA;
+    }
+
     return null;
+  }
+
+  private pickRandomHouseAssetType(): AssetType {
+    const index = Math.floor(Math.random() * RANDOM_HOUSE_TYPES.length);
+    return RANDOM_HOUSE_TYPES[index] ?? AssetType.STONE_WALL_HOUSE;
   }
 
   private toApplicationCard(application: ApplicationListItem) {
