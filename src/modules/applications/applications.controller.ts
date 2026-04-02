@@ -25,7 +25,6 @@ import { CurrentUser, type AuthUser } from '../../common/decorators/current-user
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { ParseUuidPipe } from '../../common/pipes/parse-uuid.pipe';
 import { ApplicationsService } from './applications.service';
-import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
@@ -203,9 +202,9 @@ export class ApplicationsController {
   @Get('admin/kanban')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
-  @ApiOperation({ summary: '관리자 칸반 보드 조회' })
-  adminKanban(@Query() query: AdminKanbanQueryDto) {
-    return this.applicationsService.adminKanban(query);
+  @ApiOperation({ summary: '관리자 칸반 보드 조회 (파라미터 없음)' })
+  adminKanban() {
+    return this.applicationsService.adminKanban();
   }
 
   @Get('admin/:id')

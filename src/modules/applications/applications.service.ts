@@ -19,10 +19,9 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHmac } from 'crypto';
-import * as dayjs from 'dayjs';
+import dayjs = require('dayjs');
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../../prisma/prisma.service';
-import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
@@ -632,48 +631,14 @@ export class ApplicationsService {
     };
   }
 
-  async adminKanban(query: AdminKanbanQueryDto) {
-    const range = this.resolveMonthRange(query.month);
-    const baseWhere: Prisma.ApplicationWhereInput = {
+  async adminKanban() {
+    const range = this.resolveMonthRange();
+    const where: Prisma.ApplicationWhereInput = {
       createdAt: {
         gte: range.start,
         lte: range.end,
       },
     };
-
-    const searchWhere: Prisma.ApplicationWhereInput | undefined = query.search
-      ? {
-          OR: [
-            {
-              applicant: {
-                name: {
-                  contains: query.search,
-                  mode: 'insensitive',
-                },
-              },
-            },
-            {
-              applicant: {
-                phone: {
-                  contains: query.search,
-                },
-              },
-            },
-            {
-              asset: {
-                address: {
-                  contains: query.search,
-                  mode: 'insensitive',
-                },
-              },
-            },
-          ],
-        }
-      : undefined;
-
-    const where: Prisma.ApplicationWhereInput = searchWhere
-      ? { AND: [baseWhere, searchWhere] }
-      : baseWhere;
 
     const [items, overview] = await Promise.all([
       this.prisma.application.findMany({
