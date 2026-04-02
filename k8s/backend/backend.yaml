@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
       - name: prisma-db-push
-        image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-10
+        image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-11
         command: ["sh", "-c", "bunx prisma db push"]
         env:
         - name: PORT
@@ -24,7 +24,7 @@ spec:
             name: app-db-secret
       containers:
       - name: backend
-        image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-10
+        image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-11
         env:
         - name: PORT
           value: "8080"
