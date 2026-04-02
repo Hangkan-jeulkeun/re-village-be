@@ -5,8 +5,19 @@ metadata:
   annotations:
     kubernetes.io/ingress.class: nginx
 spec:
+  ingressClassName: nginx
   rules:
-  - host: Hangkan-jeulkeun.goorm.training
+  - host: api.hangkan-jeulkeun.goorm.training
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 80
+  - host: hangkan-jeulkeun.goorm.training
     http:
       paths:
       - path: /api
