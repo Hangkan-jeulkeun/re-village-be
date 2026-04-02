@@ -5,7 +5,7 @@ namespace: goormthon-6 #FIXME:
 
 resources:
   - backend.yaml
-  # - ingress.yaml # API 호출 방식이 Client-Side인 경우 주석 해제
+  - ingress.yaml
 
 images:
   - name: backend
