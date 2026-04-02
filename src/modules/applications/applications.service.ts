@@ -966,13 +966,15 @@ export class ApplicationsService {
         select: { id: true },
       });
 
+    const persistableAssetType = await this.resolvePersistableAssetType(assetType);
+
     let asset;
     try {
-      asset = await createAsset(assetType);
+      asset = await createAsset(persistableAssetType);
     } catch (error) {
       if (this.isAssetTypeEnumMismatchError(error)) {
         try {
-          asset = await createAsset(this.pickLegacyAssetType());
+          asset = await createAsset(await this.resolvePersistableAssetType(this.pickLegacyAssetType()));
         } catch (retryError) {
           this.throwPrismaException(retryError, 'ASSET_CREATE_RETRY');
         }
@@ -2282,6 +2284,49 @@ export class ApplicationsService {
   private pickLegacyAssetType(): AssetType {
     const index = Math.floor(Math.random() * LEGACY_ASSET_TYPES.length);
     return LEGACY_ASSET_TYPES[index] ?? AssetType.OTHER;
+  }
+
+  private async resolvePersistableAssetType(preferred: AssetType): Promise<AssetType> {
+    const supported = await this.getSupportedAssetTypesFromDatabase();
+
+    if (supported.size === 0) {
+      return LEGACY_ASSET_TYPES.includes(preferred) ? preferred : AssetType.OTHER;
+    }
+
+    if (supported.has(preferred)) {
+      return preferred;
+    }
+
+    const randomSupported = RANDOM_HOUSE_TYPES.find((type) => supported.has(type));
+    if (randomSupported) {
+      return randomSupported;
+    }
+
+    const legacySupported = LEGACY_ASSET_TYPES.find((type) => supported.has(type));
+    if (legacySupported) {
+      return legacySupported;
+    }
+
+    return Array.from(supported)[0] ?? AssetType.OTHER;
+  }
+
+  private async getSupportedAssetTypesFromDatabase(): Promise<Set<AssetType>> {
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ value: string }>>(
+        Prisma.sql`SELECT unnest(enum_range(NULL::"AssetType"))::text as value`,
+      );
+
+      const supported = new Set<AssetType>();
+      for (const row of rows) {
+        const parsed = this.toAssetType(row.value);
+        if (parsed) {
+          supported.add(parsed);
+        }
+      }
+      return supported;
+    } catch {
+      return new Set<AssetType>();
+    }
   }
 
   private isAssetTypeEnumMismatchError(error: unknown): boolean {
