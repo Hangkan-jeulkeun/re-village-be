@@ -55,6 +55,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
       exception instanceof Error ? exception.stack : JSON.stringify(exception),
     );
 
+    const schemaMismatchMessage = this.resolveSchemaMismatchMessage(exception);
+    if (schemaMismatchMessage) {
+      response.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        success: false,
+        error: {
+          statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+          code: 'SCHEMA_MISMATCH',
+          message: schemaMismatchMessage,
+          path,
+        },
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
     response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       success: false,
       error: {
@@ -81,5 +96,26 @@ export class HttpExceptionFilter implements ExceptionFilter {
     }
 
     return maybeMessage ?? fallback;
+  }
+
+  private resolveSchemaMismatchMessage(exception: unknown): string | null {
+    if (!(exception instanceof Error)) {
+      return null;
+    }
+
+    const message = exception.message.toLowerCase();
+
+    if (
+      message.includes("value 'empty_house' not found in enum 'assettype'") ||
+      (message.includes('not found in enum') && message.includes('assettype'))
+    ) {
+      return 'DB AssetType enum과 서버 코드가 불일치합니다. 마이그레이션 적용 후 재배포가 필요합니다.';
+    }
+
+    if (message.includes('invalid input value for enum') && message.includes('assettype')) {
+      return 'DB AssetType enum과 서버 코드가 불일치합니다. 마이그레이션 적용 후 재배포가 필요합니다.';
+    }
+
+    return null;
   }
 }

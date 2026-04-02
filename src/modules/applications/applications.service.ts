@@ -19,7 +19,7 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHmac } from 'crypto';
-import dayjs from 'dayjs';
+import * as dayjs from 'dayjs';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
