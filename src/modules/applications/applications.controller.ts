@@ -163,16 +163,10 @@ export class ApplicationsController {
     return this.applicationsService.getMyApplicationDetail(user.id, id, user.role);
   }
 
-  @Post('lookup/request-code')
-  @ApiOperation({ summary: '인증번호 요청 (조회/신청 공용)' })
-  requestLookupCode(@Body() dto: RequestVerificationDto) {
-    return this.applicationsService.requestLookupCode(dto);
-  }
-
   @Post('verification/request-code')
-  @ApiOperation({ summary: '신청용 인증번호 요청 (SMS 발송)' })
-  requestSubmitCode(@Body() dto: RequestVerificationDto) {
-    return this.applicationsService.requestApplyCode(dto);
+  @ApiOperation({ summary: '인증번호 요청 (조회/신청 공용)' })
+  requestCode(@Body() dto: RequestVerificationDto) {
+    return this.applicationsService.requestCode(dto);
   }
 
   @Post('verification/verify')

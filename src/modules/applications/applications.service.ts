@@ -71,6 +71,13 @@ const RANDOM_HOUSE_TYPES: AssetType[] = [
   AssetType.URBAN_HOUSE_VILLA,
 ];
 
+const LEGACY_ASSET_TYPES: AssetType[] = [
+  AssetType.EMPTY_HOUSE,
+  AssetType.WAREHOUSE,
+  AssetType.FIELD,
+  AssetType.OTHER,
+];
+
 interface DocumentSource {
   fileUrl: string;
   mimeType?: string;
@@ -377,12 +384,8 @@ export class ApplicationsService {
     }
   }
 
-  async requestLookupCode(dto: RequestVerificationDto) {
-    return this.requestVerificationCode(dto, 'LOOKUP');
-  }
-
-  async requestApplyCode(dto: RequestVerificationDto) {
-    return this.requestVerificationCode(dto, 'APPLY');
+  async requestCode(dto: RequestVerificationDto) {
+    return this.requestVerificationCode(dto);
   }
 
   async verifyApplyCode(dto: VerifyCodeDto) {
@@ -390,18 +393,18 @@ export class ApplicationsService {
     return this.issueSmsVerifiedTokens(dto.name, dto.phone);
   }
 
-  private async requestVerificationCode(
-    dto: RequestVerificationDto,
-    purpose: VerificationPurpose,
-  ) {
+  private async requestVerificationCode(dto: RequestVerificationDto) {
     const phone = this.normalizePhone(dto.phone);
     const name = dto.name.trim();
     const code = this.generateCode();
-    this.verificationCodes.set(this.verificationKey(phone, purpose), {
+    const entry = {
       code,
       name,
       expiresAt: Date.now() + 3 * 60 * 1000,
-    });
+    };
+    // 인증번호 요청은 하나의 API로 통합: 조회/신청 검증 목적 키 모두 저장
+    this.verificationCodes.set(this.verificationKey(phone, 'APPLY'), entry);
+    this.verificationCodes.set(this.verificationKey(phone, 'LOOKUP'), entry);
 
     const smsResult = await this.sendVerificationCodeSms(phone, code);
     const isDevMode = this.configService.get<string>('app.nodeEnv') !== 'production';
@@ -941,13 +944,12 @@ export class ApplicationsService {
     }
     const aiRecommendation =
       analysisLines.length > 0 ? `\n\n[AI 매물 분석]\n${analysisLines.join('\n')}` : '';
-    let asset;
-    try {
-      asset = await this.prisma.asset.create({
+    const createAsset = (resolvedAssetType: AssetType) =>
+      this.prisma.asset.create({
         data: {
           ownerId,
           title: `${name} 신청 건`,
-          assetType,
+          assetType: resolvedAssetType,
           address,
           regionCode: 'JEJU-UNKNOWN',
           areaSqm,
@@ -963,8 +965,20 @@ export class ApplicationsService {
         },
         select: { id: true },
       });
+
+    let asset;
+    try {
+      asset = await createAsset(assetType);
     } catch (error) {
-      this.throwPrismaException(error, 'ASSET_CREATE');
+      if (this.isAssetTypeEnumMismatchError(error)) {
+        try {
+          asset = await createAsset(this.pickLegacyAssetType());
+        } catch (retryError) {
+          this.throwPrismaException(retryError, 'ASSET_CREATE_RETRY');
+        }
+      } else {
+        this.throwPrismaException(error, 'ASSET_CREATE');
+      }
     }
 
     return asset.id;
@@ -2265,6 +2279,32 @@ export class ApplicationsService {
     return RANDOM_HOUSE_TYPES[index] ?? AssetType.STONE_WALL_HOUSE;
   }
 
+  private pickLegacyAssetType(): AssetType {
+    const index = Math.floor(Math.random() * LEGACY_ASSET_TYPES.length);
+    return LEGACY_ASSET_TYPES[index] ?? AssetType.OTHER;
+  }
+
+  private isAssetTypeEnumMismatchError(error: unknown): boolean {
+    const message =
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : typeof error === 'string'
+          ? error.toLowerCase()
+          : '';
+
+    if (!message) {
+      return false;
+    }
+
+    const hasEnumMismatch = message.includes('invalid input value for enum');
+    const hasAssetType =
+      message.includes('assettype') ||
+      message.includes('"assettype"') ||
+      message.includes("'assettype'");
+
+    return hasEnumMismatch && hasAssetType;
+  }
+
   private toApplicationCard(application: ApplicationListItem) {
     const leaseYears = application.contract
       ? dayjs(application.contract.endDate).diff(dayjs(application.contract.startDate), 'year', true)
@@ -2338,6 +2378,15 @@ export class ApplicationsService {
 
       if (error.code === 'P2025') {
         throw new NotFoundException('요청한 데이터를 찾을 수 없습니다.');
+      }
+    }
+
+    if (error instanceof Prisma.PrismaClientUnknownRequestError) {
+      const message = error.message.toLowerCase();
+      if (message.includes('invalid input value for enum')) {
+        throw new ServiceUnavailableException(
+          '데이터베이스 enum 스키마가 최신 상태가 아닙니다. 관리자에게 문의해주세요.',
+        );
       }
     }
 
