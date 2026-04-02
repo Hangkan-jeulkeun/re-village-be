@@ -218,21 +218,42 @@ export class ApplicationsService {
     uploadedDocumentFiles: Express.Multer.File[] = [],
     contentType?: string,
   ) {
+    const documentUrls = this.toStringArraySafe(dto.documentUrls);
+
+    if (uploadedDocumentFiles.length === 0 && documentUrls.length === 0) {
+      throw new BadRequestException(
+        'documents 필드에 PDF 파일을 하나 이상 첨부해주세요.',
+      );
+    }
+
+    if (uploadedDocumentFiles.length > 0) {
+      if (!contentType?.includes('multipart/form-data')) {
+        throw new BadRequestException('파일 업로드는 multipart/form-data로 요청해야 합니다.');
+      }
+
+      const maxSize = 10 * 1024 * 1024;
+      for (const file of uploadedDocumentFiles) {
+        if (!file.buffer || file.size <= 0) {
+          throw new BadRequestException('업로드 파일 읽기에 실패했습니다.');
+        }
+        if (file.size > maxSize) {
+          throw new BadRequestException('PDF 파일은 개당 10MB 이하만 허용됩니다.');
+        }
+        if (!this.isPdfUploadFile(file)) {
+          throw new BadRequestException(
+            'documents 필드에는 PDF 파일만 업로드할 수 있습니다.',
+          );
+        }
+      }
+    }
+
     const sources: DocumentSource[] = [
-      ...(dto.documentUrls?.map((fileUrl) => ({ fileUrl })) ?? []),
       ...uploadedDocumentFiles.map((file) => ({
         fileUrl: this.toDataUrl(file),
         mimeType: file.mimetype,
       })),
+      ...documentUrls.map((fileUrl) => ({ fileUrl })),
     ];
-
-    if (sources.length === 0) {
-      throw new BadRequestException('PDF 문서 URL 또는 documents 파일을 하나 이상 첨부해주세요.');
-    }
-
-    if (uploadedDocumentFiles.length > 0 && !contentType?.includes('multipart/form-data')) {
-      throw new BadRequestException('파일 업로드는 multipart/form-data로 요청해야 합니다.');
-    }
 
     const extracted = await this.extractPdfAutoFillFromDocuments(sources);
     if (!extracted) {
@@ -1055,6 +1076,56 @@ export class ApplicationsService {
     const mimeType = file.mimetype?.trim() || 'application/octet-stream';
     const base64 = file.buffer.toString('base64');
     return `data:${mimeType};base64,${base64}`;
+  }
+
+  private toStringArraySafe(value: unknown): string[] {
+    if (value == null || value === '') {
+      return [];
+    }
+
+    if (Array.isArray(value)) {
+      return value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+    }
+
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return [];
+      }
+
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (Array.isArray(parsed)) {
+          return parsed
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+        }
+      } catch {
+        return [trimmed];
+      }
+
+      return [trimmed];
+    }
+
+    return [];
+  }
+
+  private isPdfUploadFile(file: Express.Multer.File): boolean {
+    const mime = (file.mimetype ?? '').toLowerCase();
+    const originalName = (file.originalname ?? '').toLowerCase();
+    if (mime.includes('pdf') || originalName.endsWith('.pdf')) {
+      return true;
+    }
+
+    if (!file.buffer || file.buffer.length < 4) {
+      return false;
+    }
+
+    return file.buffer.subarray(0, 4).toString('ascii') === '%PDF';
   }
 
   private async issueSmsVerifiedTokens(nameRaw: string, phoneRaw: string) {
@@ -2061,7 +2132,9 @@ export class ApplicationsService {
       if (dataUrlMatch) {
         const [, mimeType, base64] = dataUrlMatch;
         const normalizedMime = (mimeType || mimeTypeHint || '').toLowerCase();
-        if (normalizedMime !== 'application/pdf') {
+        const isPdfMime = normalizedMime.includes('pdf');
+        const isPdfBySignature = this.looksLikePdfBase64(base64);
+        if (!isPdfMime && !isPdfBySignature) {
           return null;
         }
         if (!base64 || base64.length === 0) {
@@ -2104,6 +2177,19 @@ export class ApplicationsService {
       };
     } catch {
       return null;
+    }
+  }
+
+  private looksLikePdfBase64(base64: string): boolean {
+    if (!base64) {
+      return false;
+    }
+
+    try {
+      const head = Buffer.from(base64.slice(0, 64), 'base64');
+      return head.subarray(0, 4).toString('ascii') === '%PDF';
+    } catch {
+      return false;
     }
   }
 
