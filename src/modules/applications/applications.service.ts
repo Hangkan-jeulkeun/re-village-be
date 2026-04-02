@@ -27,6 +27,7 @@ import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
+import { ExtractDocumentsDto } from './dto/extract-documents.dto';
 import {
   ApplicationDocumentType,
   QuickApplicationDto,
@@ -59,6 +60,23 @@ export interface NearbyAttraction {
 interface QuickApplicationUploadFiles {
   photos?: Express.Multer.File[];
   documents?: Express.Multer.File[];
+}
+
+interface DocumentSource {
+  fileUrl: string;
+  mimeType?: string;
+}
+
+export interface PdfExtractionResult {
+  address: string | null;
+  detectedAssetType: AssetType | null;
+  detectedAreaSqm: number | null;
+  detectedFloorCount: number | null;
+  hasYard: boolean | null;
+  hasParking: boolean | null;
+  summary: string | null;
+  warnings: string[];
+  sourceCount: number;
 }
 
 export interface HouseAutoFillResult {
@@ -144,17 +162,27 @@ export class ApplicationsService {
     this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
 
     const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
+    const documentSources = this.buildDocumentSources(dto, uploadFiles.documents ?? []);
+    const pdfExtracted = await this.extractPdfAutoFillFromDocuments(documentSources);
     const applicant = await this.getApplicantFromToken(userId);
     const applicantName = applicant.name;
     const autoFilled = await this.resolveAutoFillFromInput({
-      address: dto.address ?? dto.detectedAddress,
+      address: dto.address ?? dto.detectedAddress ?? pdfExtracted?.address ?? undefined,
       latitude: dto.latitude,
       longitude: dto.longitude,
-      assetType: dto.assetType ?? dto.detectedAssetType,
-      areaSqm: dto.areaSqm ?? dto.detectedAreaSqm,
-      floorCount: dto.floorCount,
-      hasYard: dto.hasYard,
-      hasParking: dto.hasParking,
+      assetType:
+        dto.assetType ??
+        dto.detectedAssetType ??
+        pdfExtracted?.detectedAssetType ??
+        undefined,
+      areaSqm:
+        dto.areaSqm ??
+        dto.detectedAreaSqm ??
+        pdfExtracted?.detectedAreaSqm ??
+        undefined,
+      floorCount: dto.floorCount ?? pdfExtracted?.detectedFloorCount ?? undefined,
+      hasYard: dto.hasYard ?? pdfExtracted?.hasYard ?? undefined,
+      hasParking: dto.hasParking ?? pdfExtracted?.hasParking ?? undefined,
       photoUrls: [...(dto.photoUrls ?? []), ...uploadedPhotoUrls],
     });
 
@@ -162,6 +190,7 @@ export class ApplicationsService {
       applicant.id,
       dto,
       autoFilled,
+      pdfExtracted,
       uploadedPhotoUrls,
       applicantName,
     );
@@ -179,7 +208,51 @@ export class ApplicationsService {
       ...application,
       statusLabel: this.statusLabel(application.status),
       autoFilled,
+      pdfExtracted,
       ...tokens,
+    };
+  }
+
+  async extractFromDocuments(
+    dto: ExtractDocumentsDto,
+    uploadedDocumentFiles: Express.Multer.File[] = [],
+    contentType?: string,
+  ) {
+    const sources: DocumentSource[] = [
+      ...(dto.documentUrls?.map((fileUrl) => ({ fileUrl })) ?? []),
+      ...uploadedDocumentFiles.map((file) => ({
+        fileUrl: this.toDataUrl(file),
+        mimeType: file.mimetype,
+      })),
+    ];
+
+    if (sources.length === 0) {
+      throw new BadRequestException('PDF 문서 URL 또는 documents 파일을 하나 이상 첨부해주세요.');
+    }
+
+    if (uploadedDocumentFiles.length > 0 && !contentType?.includes('multipart/form-data')) {
+      throw new BadRequestException('파일 업로드는 multipart/form-data로 요청해야 합니다.');
+    }
+
+    const extracted = await this.extractPdfAutoFillFromDocuments(sources);
+    if (!extracted) {
+      throw new ServiceUnavailableException(
+        'PDF 자동분석을 수행할 수 없습니다. GEMINI 설정 또는 PDF 파일을 확인해주세요.',
+      );
+    }
+
+    const autoFilled = await this.resolveAutoFillFromInput({
+      address: extracted.address ?? undefined,
+      assetType: extracted.detectedAssetType ?? undefined,
+      areaSqm: extracted.detectedAreaSqm ?? undefined,
+      floorCount: extracted.detectedFloorCount ?? undefined,
+      hasYard: extracted.hasYard ?? undefined,
+      hasParking: extracted.hasParking ?? undefined,
+    });
+
+    return {
+      extracted,
+      autoFilled,
     };
   }
 
@@ -777,17 +850,29 @@ export class ApplicationsService {
     ownerId: string,
     dto: QuickApplicationDto,
     autoFilled: HouseAutoFillResult,
+    pdfExtracted: PdfExtractionResult | null,
     uploadedPhotoUrls: string[],
     applicantName: string,
   ): Promise<string> {
     const name = applicantName;
-    const address = dto.address ?? dto.detectedAddress ?? autoFilled.address ?? '주소 미입력';
+    const address =
+      dto.address ??
+      dto.detectedAddress ??
+      pdfExtracted?.address ??
+      autoFilled.address ??
+      '주소 미입력';
     const assetType =
       dto.assetType ??
       dto.detectedAssetType ??
+      pdfExtracted?.detectedAssetType ??
       autoFilled.detectedAssetType ??
       AssetType.EMPTY_HOUSE;
-    const areaSqm = dto.areaSqm ?? dto.detectedAreaSqm ?? autoFilled.detectedAreaSqm ?? undefined;
+    const areaSqm =
+      dto.areaSqm ??
+      dto.detectedAreaSqm ??
+      pdfExtracted?.detectedAreaSqm ??
+      autoFilled.detectedAreaSqm ??
+      undefined;
     const latitude = dto.latitude ?? autoFilled.latitude ?? undefined;
     const longitude = dto.longitude ?? autoFilled.longitude ?? undefined;
     const mergedPhotoUrls = [...(dto.photoUrls ?? []), ...uploadedPhotoUrls];
@@ -824,6 +909,9 @@ export class ApplicationsService {
     }
     if (autoFilled.recommendationReason) {
       analysisLines.push(`근거: ${autoFilled.recommendationReason}`);
+    }
+    if (pdfExtracted?.summary) {
+      analysisLines.push(`문서 요약: ${pdfExtracted.summary}`);
     }
     const aiRecommendation =
       analysisLines.length > 0 ? `\n\n[AI 매물 분석]\n${analysisLines.join('\n')}` : '';
@@ -1212,6 +1300,158 @@ export class ApplicationsService {
       })) ?? [];
 
     return [...fromTyped, ...fromLegacy];
+  }
+
+  private buildDocumentSources(
+    dto: QuickApplicationDto,
+    uploadedDocumentFiles: Express.Multer.File[],
+  ): DocumentSource[] {
+    const normalizedDocuments = this.normalizeDocuments(dto);
+    return [
+      ...normalizedDocuments.map((document) => ({ fileUrl: document.fileUrl })),
+      ...uploadedDocumentFiles.map((file) => ({
+        fileUrl: this.toDataUrl(file),
+        mimeType: file.mimetype,
+      })),
+    ];
+  }
+
+  private async extractPdfAutoFillFromDocuments(
+    sources: DocumentSource[],
+  ): Promise<PdfExtractionResult | null> {
+    if (sources.length === 0) {
+      return null;
+    }
+
+    const geminiApiKey = this.configService.get<string>('ai.geminiApiKey');
+    const geminiModel = this.configService.get<string>('ai.geminiModel');
+    const geminiBaseUrl = this.configService.get<string>('ai.geminiBaseUrl');
+    const warnings: string[] = [];
+
+    if (!geminiApiKey || !geminiModel || !geminiBaseUrl) {
+      return {
+        address: null,
+        detectedAssetType: null,
+        detectedAreaSqm: null,
+        detectedFloorCount: null,
+        hasYard: null,
+        hasParking: null,
+        summary: null,
+        warnings: ['GEMINI_API_KEY가 설정되지 않아 PDF 자동분석을 건너뜁니다.'],
+        sourceCount: 0,
+      };
+    }
+
+    const inlineParts = (
+      await Promise.all(
+        sources.slice(0, 5).map((source) => this.toPdfInlineData(source.fileUrl, source.mimeType)),
+      )
+    ).filter((part): part is { inline_data: { mime_type: string; data: string } } => part !== null);
+
+    if (inlineParts.length === 0) {
+      return {
+        address: null,
+        detectedAssetType: null,
+        detectedAreaSqm: null,
+        detectedFloorCount: null,
+        hasYard: null,
+        hasParking: null,
+        summary: null,
+        warnings: ['PDF 형식 문서를 찾지 못해 자동분석을 건너뜁니다.'],
+        sourceCount: 0,
+      };
+    }
+
+    const prompt = [
+      '다음 첨부 문서는 제주 빈집 신청 관련 PDF(등기부등본, 건축물대장, 토지대장 등)입니다.',
+      '문서에서 신청 화면 자동입력에 필요한 항목을 추출하세요.',
+      '반드시 JSON만 반환하고 markdown/code block을 사용하지 마세요.',
+      'JSON schema:',
+      '{"address":"string|null","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER|null","detectedAreaSqm":number|null,"detectedFloorCount":number|null,"hasYard":true|false|null,"hasParking":true|false|null,"summary":"string|null"}',
+      '규칙:',
+      '- 값이 불확실하면 null',
+      '- detectedAreaSqm는 제곱미터(m2) 기준 숫자',
+      '- summary는 어르신도 이해하기 쉬운 1~2문장 요약',
+      '- detectedAssetType은 실제 건물 특성으로 분류',
+    ].join('\n');
+
+    const endpoint = `${geminiBaseUrl}/v1beta/models/${geminiModel}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }, ...inlineParts],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        return {
+          address: null,
+          detectedAssetType: null,
+          detectedAreaSqm: null,
+          detectedFloorCount: null,
+          hasYard: null,
+          hasParking: null,
+          summary: null,
+          warnings: ['Gemini PDF 분석 호출에 실패했습니다.'],
+          sourceCount: inlineParts.length,
+        };
+      }
+
+      const data = (await response.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const text =
+        data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+      const parsed = this.parseGeminiJson(text);
+
+      if (!parsed) {
+        warnings.push('PDF 분석 결과 JSON 파싱에 실패했습니다.');
+      }
+
+      return {
+        address:
+          parsed && typeof parsed.address === 'string' ? parsed.address.trim() || null : null,
+        detectedAssetType: this.toAssetType(
+          parsed && typeof parsed.detectedAssetType === 'string'
+            ? parsed.detectedAssetType
+            : undefined,
+        ),
+        detectedAreaSqm: this.toPositiveInt(parsed?.detectedAreaSqm),
+        detectedFloorCount: this.toPositiveInt(parsed?.detectedFloorCount),
+        hasYard: this.coerceBoolean(parsed?.hasYard),
+        hasParking: this.coerceBoolean(parsed?.hasParking),
+        summary:
+          parsed && typeof parsed.summary === 'string' ? parsed.summary.trim() || null : null,
+        warnings,
+        sourceCount: inlineParts.length,
+      };
+    } catch {
+      return {
+        address: null,
+        detectedAssetType: null,
+        detectedAreaSqm: null,
+        detectedFloorCount: null,
+        hasYard: null,
+        hasParking: null,
+        summary: null,
+        warnings: ['Gemini PDF 분석 중 네트워크 오류가 발생했습니다.'],
+        sourceCount: inlineParts.length,
+      };
+    }
   }
 
   private async resolveAutoFillFromInput(dto: AutofillHouseDto): Promise<HouseAutoFillResult> {
@@ -1810,6 +2050,61 @@ export class ApplicationsService {
     }
 
     return null;
+  }
+
+  private async toPdfInlineData(
+    url: string,
+    mimeTypeHint?: string,
+  ): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
+    try {
+      const dataUrlMatch = url.match(/^data:(.+?);base64,(.+)$/);
+      if (dataUrlMatch) {
+        const [, mimeType, base64] = dataUrlMatch;
+        const normalizedMime = (mimeType || mimeTypeHint || '').toLowerCase();
+        if (normalizedMime !== 'application/pdf') {
+          return null;
+        }
+        if (!base64 || base64.length === 0) {
+          return null;
+        }
+        return {
+          inline_data: {
+            mime_type: 'application/pdf',
+            data: base64,
+          },
+        };
+      }
+
+      const hinted = (mimeTypeHint ?? '').toLowerCase();
+      const isPdfByHint = hinted === 'application/pdf' || url.toLowerCase().includes('.pdf');
+      if (!isPdfByHint) {
+        return null;
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        return null;
+      }
+
+      const contentType = (response.headers.get('content-type') ?? hinted).toLowerCase();
+      if (!contentType.includes('application/pdf')) {
+        return null;
+      }
+
+      const data = Buffer.from(await response.arrayBuffer()).toString('base64');
+      if (!data) {
+        return null;
+      }
+
+      return {
+        inline_data: {
+          mime_type: 'application/pdf',
+          data,
+        },
+      };
+    } catch {
+      return null;
+    }
   }
 
   private async fetchImageInlineData(

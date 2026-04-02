@@ -32,6 +32,7 @@ import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { AutofillHouseDto } from './dto/autofill-house.dto';
+import { ExtractDocumentsDto } from './dto/extract-documents.dto';
 import { QuickApplicationDto } from './dto/quick-application.dto';
 import { RequestVerificationDto } from './dto/request-verification.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
@@ -55,7 +56,7 @@ export class ApplicationsController {
   @ApiConsumes('application/json', 'multipart/form-data')
   @ApiBody({
     description:
-      '액세스 토큰 필수. JSON 또는 multipart/form-data 지원. multipart 사용 시 일반 필드는 그대로 넣고, 사진은 photos, 서류는 documents 필드에 파일 첨부하세요.',
+      '액세스 토큰 필수. JSON 또는 multipart/form-data 지원. multipart 사용 시 일반 필드는 그대로 넣고, 사진은 photos, 서류(PDF)는 documents 필드에 파일 첨부하세요. documents에 PDF가 포함되면 Gemini가 주소/건물유형/면적 등을 자동 추출합니다.',
     schema: {
       type: 'object',
       properties: {
@@ -95,6 +96,48 @@ export class ApplicationsController {
     const dto = this.toQuickApplicationDto(rawBody);
     const files = this.groupFiles(uploadedFiles);
     return this.applicationsService.createQuick(user.id, dto, files, contentType);
+  }
+
+  @Post('documents/extract')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'PDF 서류 AI 자동입력 추출 (액세스 토큰 기반)' })
+  @ApiConsumes('application/json', 'multipart/form-data')
+  @ApiBody({
+    description:
+      'JSON 또는 multipart/form-data 지원. multipart 사용 시 documents 필드에 PDF 파일을 첨부하세요.',
+    schema: {
+      type: 'object',
+      properties: {
+        documentUrls: {
+          type: 'array',
+          items: { type: 'string' },
+          example: ['https://cdn.example.com/docs/registry.pdf'],
+        },
+        payload: {
+          type: 'string',
+          example: '{"documentUrls":["https://cdn.example.com/docs/registry.pdf"]}',
+        },
+        documents: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+        },
+      },
+    },
+  })
+  @UseInterceptors(AnyFilesInterceptor())
+  extractDocuments(
+    @Body() rawBody: Record<string, unknown>,
+    @UploadedFiles() uploadedFiles: Express.Multer.File[] = [],
+    @Headers('content-type') contentType?: string,
+  ) {
+    const dto = this.toExtractDocumentsDto(rawBody);
+    const files = this.groupFiles(uploadedFiles);
+    return this.applicationsService.extractFromDocuments(
+      dto,
+      files.documents ?? [],
+      contentType,
+    );
   }
 
   @Get('me')
@@ -239,6 +282,32 @@ export class ApplicationsController {
     delete merged.payload;
 
     return merged as unknown as QuickApplicationDto;
+  }
+
+  private toExtractDocumentsDto(rawBody: Record<string, unknown>): ExtractDocumentsDto {
+    const payloadRaw = typeof rawBody.payload === 'string' ? rawBody.payload : undefined;
+    let payloadObject: Record<string, unknown> = {};
+
+    if (payloadRaw) {
+      try {
+        const parsed = JSON.parse(payloadRaw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          payloadObject = parsed as Record<string, unknown>;
+        } else {
+          throw new BadRequestException('payload는 JSON 객체 문자열이어야 합니다.');
+        }
+      } catch {
+        throw new BadRequestException('payload JSON 파싱에 실패했습니다.');
+      }
+    }
+
+    const merged = {
+      ...payloadObject,
+      ...rawBody,
+    };
+    delete merged.payload;
+
+    return merged as unknown as ExtractDocumentsDto;
   }
 
   private groupFiles(files: Express.Multer.File[]) {
