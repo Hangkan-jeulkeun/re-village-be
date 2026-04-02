@@ -136,16 +136,16 @@ export class ApplicationsService {
   }
 
   async createQuick(
+    userId: string,
     dto: QuickApplicationDto,
     uploadFiles: QuickApplicationUploadFiles = {},
     contentType?: string,
   ) {
     this.validateQuickApplicationUploadInput(dto, uploadFiles, contentType);
-    const applicantName = this.resolveApplicantName(dto);
-    this.verifyCode(dto.phone, dto.verificationCode, 'APPLY', true, applicantName);
 
     const uploadedPhotoUrls = this.filesToDataUrls(uploadFiles.photos);
-    const applicant = await this.findOrCreateApplicant(dto);
+    const applicant = await this.getApplicantFromToken(userId);
+    const applicantName = applicant.name;
     const autoFilled = await this.resolveAutoFillFromInput({
       address: dto.address ?? dto.detectedAddress,
       latitude: dto.latitude,
@@ -163,6 +163,7 @@ export class ApplicationsService {
       dto,
       autoFilled,
       uploadedPhotoUrls,
+      applicantName,
     );
 
     const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
@@ -764,45 +765,12 @@ export class ApplicationsService {
     };
   }
 
-  private async findOrCreateApplicant(dto: QuickApplicationDto) {
-    const name = this.resolveApplicantName(dto);
-    const phone = this.normalizePhone(dto.phone);
-
-    const existing = await this.prisma.user.findFirst({
-      where: { phone },
-      orderBy: { createdAt: 'asc' },
-    });
-
-    if (existing) {
-      try {
-        return await this.prisma.user.update({
-          where: { id: existing.id },
-          data: {
-            name,
-            ...(dto.email ? { email: dto.email } : {}),
-          },
-        });
-      } catch (error) {
-        this.throwPrismaException(error, 'APPLICANT_UPDATE');
-      }
+  private async getApplicantFromToken(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('유효한 사용자 토큰이 필요합니다.');
     }
-
-    const email = dto.email ?? `phone-${phone.replace(/[^0-9]/g, '')}-${uuidv4()}@placeholder.local`;
-    const passwordHash = await bcrypt.hash(uuidv4(), 10);
-
-    try {
-      return await this.prisma.user.create({
-        data: {
-          name,
-          phone,
-          email,
-          passwordHash,
-          role: UserRole.ELDER,
-        },
-      });
-    } catch (error) {
-      this.throwPrismaException(error, 'APPLICANT_CREATE');
-    }
+    return user;
   }
 
   private async createAssetForQuickApplication(
@@ -810,8 +778,9 @@ export class ApplicationsService {
     dto: QuickApplicationDto,
     autoFilled: HouseAutoFillResult,
     uploadedPhotoUrls: string[],
+    applicantName: string,
   ): Promise<string> {
-    const name = this.resolveApplicantName(dto);
+    const name = applicantName;
     const address = dto.address ?? dto.detectedAddress ?? autoFilled.address ?? '주소 미입력';
     const assetType =
       dto.assetType ??
@@ -1225,15 +1194,6 @@ export class ApplicationsService {
     if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
     if (lower.endsWith('.webp')) return 'image/webp';
     return 'application/octet-stream';
-  }
-
-  private resolveApplicantName(dto: QuickApplicationDto): string {
-    const name = dto.name ?? dto.applicantName;
-    if (!name || name.trim().length === 0) {
-      throw new BadRequestException('이름은 필수입니다.');
-    }
-
-    return name.trim();
   }
 
   private normalizeDocuments(dto: QuickApplicationDto): Array<{

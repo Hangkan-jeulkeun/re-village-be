@@ -101,18 +101,23 @@ export class QuickApplicationDto {
   @Length(1, 50)
   applicantName?: string;
 
-  @ApiProperty({ example: '010-1234-5678', description: '하이픈 포함 입력 허용' })
-  @Matches(/^[+0-9][0-9-]{7,19}$/)
-  phone!: string;
-
-  @ApiProperty({
-    example: '123456',
-    description: '전화번호 SMS 인증코드 (6자리)',
+  @ApiPropertyOptional({
+    example: '010-1234-5678',
+    description: '더 이상 필수 아님 (액세스 토큰 기반 신청)',
   })
+  @IsOptional()
+  @Matches(/^[+0-9][0-9-]{7,19}$/)
+  phone?: string;
+
+  @ApiPropertyOptional({
+    example: '123456',
+    description: '더 이상 필수 아님 (액세스 토큰 기반 신청)',
+  })
+  @IsOptional()
   @IsString()
   @Length(6, 6)
   @Matches(/^\d{6}$/)
-  verificationCode!: string;
+  verificationCode?: string;
 
   @ApiPropertyOptional({ example: 'owner@example.com' })
   @IsOptional()

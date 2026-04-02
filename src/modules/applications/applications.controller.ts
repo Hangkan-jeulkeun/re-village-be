@@ -49,17 +49,16 @@ export class ApplicationsController {
   }
 
   @Post()
-  @ApiOperation({ summary: '신청 접수 (회원가입 없이 이름/전화번호 기반)' })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '신청 접수 (액세스 토큰 기반)' })
   @ApiConsumes('application/json', 'multipart/form-data')
   @ApiBody({
     description:
-      'JSON 또는 multipart/form-data 지원. multipart 사용 시 일반 필드는 그대로 넣고, 사진은 photos, 서류는 documents 필드에 파일 첨부하세요.',
+      '액세스 토큰 필수. JSON 또는 multipart/form-data 지원. multipart 사용 시 일반 필드는 그대로 넣고, 사진은 photos, 서류는 documents 필드에 파일 첨부하세요.',
     schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', example: '홍길동' },
-        phone: { type: 'string', example: '010-1234-5678' },
-        verificationCode: { type: 'string', example: '123456' },
         email: { type: 'string', example: 'owner@example.com' },
         address: { type: 'string', example: '제주특별자치도 서귀포시 천지동' },
         assetType: { type: 'string', example: 'EMPTY_HOUSE' },
@@ -71,7 +70,7 @@ export class ApplicationsController {
         payload: {
           type: 'string',
           example:
-            '{"name":"홍길동","phone":"010-1234-5678","address":"제주특별자치도 서귀포시 천지동"}',
+            '{"address":"제주특별자치도 서귀포시 천지동","assetType":"EMPTY_HOUSE"}',
           description:
             '선택. multipart에서 JSON 문자열로 전달 가능. payload와 개별 필드가 겹치면 개별 필드 우선',
         },
@@ -90,11 +89,12 @@ export class ApplicationsController {
   create(
     @Body() rawBody: Record<string, unknown>,
     @UploadedFiles() uploadedFiles: Express.Multer.File[] = [],
+    @CurrentUser() user: AuthUser,
     @Headers('content-type') contentType?: string,
   ) {
     const dto = this.toQuickApplicationDto(rawBody);
     const files = this.groupFiles(uploadedFiles);
-    return this.applicationsService.createQuick(dto, files, contentType);
+    return this.applicationsService.createQuick(user.id, dto, files, contentType);
   }
 
   @Get('me')
