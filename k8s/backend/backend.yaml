@@ -15,7 +15,23 @@ spec:
       initContainers:
       - name: prisma-db-push
         image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-11
-        command: ["sh", "-c", "bunx prisma db push"]
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          echo "[init] prisma db push start"
+          retry=0
+          until bunx prisma db push; do
+            retry=$((retry + 1))
+            if [ "$retry" -ge 24 ]; then
+              echo "[init] prisma db push failed after ${retry} attempts"
+              exit 1
+            fi
+            echo "[init] prisma db push failed, retry ${retry}/24 in 5s"
+            sleep 5
+          done
+          echo "[init] prisma db push success"
         env:
         - name: PORT
           value: "8080"
