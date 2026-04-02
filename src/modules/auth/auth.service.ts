@@ -1,11 +1,12 @@
 import {
   BadRequestException,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { User, UserRole } from '@prisma/client';
+import { Prisma, User, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
@@ -41,15 +42,7 @@ export class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.prisma.user.create({
-      data: {
-        email: dto.email,
-        passwordHash,
-        name: dto.name,
-        phone: dto.phone,
-        role: dto.role ?? UserRole.YOUTH,
-      },
-    });
+    const user = await this.createUser(dto, passwordHash);
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
     return {
@@ -120,5 +113,30 @@ export class AuthService {
       profileImageUrl: user.profileImageUrl,
       isActive: user.isActive,
     };
+  }
+
+  private async createUser(dto: SignupDto, passwordHash: string): Promise<User> {
+    try {
+      return await this.prisma.user.create({
+        data: {
+          email: dto.email,
+          passwordHash,
+          name: dto.name,
+          phone: dto.phone,
+          role: dto.role ?? UserRole.YOUTH,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2021'
+      ) {
+        throw new ServiceUnavailableException(
+          '데이터베이스 스키마가 준비되지 않았습니다. 관리자에게 문의하세요.',
+        );
+      }
+
+      throw error;
+    }
   }
 }
