@@ -12,31 +12,6 @@ spec:
       labels:
         app: backend
     spec:
-      initContainers:
-      - name: prisma-db-push
-        image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-13
-        command:
-        - sh
-        - -c
-        - |
-          set -eu
-          echo "[init] prisma db push start"
-          if [ -z "${DATABASE_URL:-}" ]; then
-            echo "[init] DATABASE_URL is missing"
-          fi
-          retry=0
-          until bunx prisma db push; do
-            retry=$((retry + 1))
-            echo "[init] prisma db push failed, retry ${retry} in 5s"
-            sleep 5
-          done
-          echo "[init] prisma db push success"
-        env:
-        - name: PORT
-          value: "8080"
-        envFrom:
-        - secretRef:
-            name: app-db-secret
       containers:
       - name: backend
         image: 837126493345.dkr.ecr.ap-northeast-2.amazonaws.com/goormthon-6/backend:build-13
