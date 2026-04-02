@@ -21,11 +21,8 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
-import { UserRole } from '@prisma/client';
 import { CurrentUser, type AuthUser } from '../../common/decorators/current-user.decorator';
-import { Roles } from '../../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
 import { ParseUuidPipe } from '../../common/pipes/parse-uuid.pipe';
 import { ApplicationsService } from './applications.service';
 import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
@@ -188,8 +185,7 @@ export class ApplicationsController {
   }
 
   @Get('admin/summary')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '관리자 신청 현황 요약' })
   adminSummary(@Query() query: AdminSummaryQueryDto) {
@@ -197,8 +193,7 @@ export class ApplicationsController {
   }
 
   @Get('admin/list')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '관리자 신청 목록 조회' })
   adminList(@Query() query: AdminListQueryDto) {
@@ -206,8 +201,7 @@ export class ApplicationsController {
   }
 
   @Get('admin/kanban')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '관리자 칸반 보드 조회' })
   adminKanban(@Query() query: AdminKanbanQueryDto) {
@@ -215,8 +209,7 @@ export class ApplicationsController {
   }
 
   @Get('admin/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '관리자 신청 상세 조회' })
   @ApiParam({ name: 'id', format: 'uuid' })
@@ -225,8 +218,7 @@ export class ApplicationsController {
   }
 
   @Patch(':id/status')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN)
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '신청 상태 변경 (관리자)' })
   @ApiParam({ name: 'id', format: 'uuid' })
