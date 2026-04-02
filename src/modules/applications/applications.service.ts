@@ -282,6 +282,14 @@ export class ApplicationsService {
     return this.requestVerificationCode(dto, 'APPLY');
   }
 
+  verifyApplyCode(dto: VerifyCodeDto) {
+    this.verifyCode(dto.phone, dto.code, 'APPLY', false);
+    return {
+      verified: true,
+      message: '인증번호가 확인되었습니다.',
+    };
+  }
+
   private async requestVerificationCode(
     dto: RequestVerificationDto,
     purpose: VerificationPurpose,
@@ -1014,6 +1022,7 @@ export class ApplicationsService {
     phoneRaw: string,
     code: string,
     purpose: VerificationPurpose = 'LOOKUP',
+    consume = true,
   ): void {
     const phone = this.normalizePhone(phoneRaw);
     const key = this.verificationKey(phone, purpose);
@@ -1032,7 +1041,9 @@ export class ApplicationsService {
       throw new UnauthorizedException('인증번호가 올바르지 않습니다.');
     }
 
-    this.verificationCodes.delete(key);
+    if (consume) {
+      this.verificationCodes.delete(key);
+    }
   }
 
   private isSmsConfigured(): boolean {

@@ -131,6 +131,12 @@ export class ApplicationsController {
     return this.applicationsService.requestApplyCode(dto);
   }
 
+  @Post('verification/verify')
+  @ApiOperation({ summary: '신청용 인증번호 검증' })
+  verifySubmitCode(@Body() dto: VerifyCodeDto) {
+    return this.applicationsService.verifyApplyCode(dto);
+  }
+
   @Post('lookup/verify')
   @ApiOperation({ summary: '인증번호 검증 후 신청내역 조회' })
   verifyAndLookup(@Body() dto: VerifyCodeDto) {
