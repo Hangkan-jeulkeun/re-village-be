@@ -220,7 +220,11 @@ export class ApplicationsController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('access-token')
   @ApiOperation({ summary: '신청 상태 변경 (관리자)' })
-  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiParam({
+    name: 'id',
+    format: 'uuid',
+    description: '신청서 ID (application.id) 또는 자산 ID (asset.id)',
+  })
   updateStatus(
     @Param('id', ParseUuidPipe) id: string,
     @Body() dto: UpdateStatusDto,

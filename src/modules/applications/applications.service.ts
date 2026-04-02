@@ -861,17 +861,7 @@ export class ApplicationsService {
   }
 
   async updateStatus(id: string, dto: UpdateStatusDto) {
-    const application = await this.prisma.application.findUnique({
-      where: { id },
-      include: {
-        applicant: {
-          select: {
-            id: true,
-            email: true,
-          },
-        },
-      },
-    });
+    const application = await this.resolveApplicationForStatusUpdate(id);
     if (!application) {
       throw new NotFoundException('신청서를 찾을 수 없습니다.');
     }
@@ -881,7 +871,7 @@ export class ApplicationsService {
     }
 
     const updated = await this.prisma.application.update({
-      where: { id },
+      where: { id: application.id },
       data: {
         status: dto.status,
         rejectReason: dto.status === ApplicationStatus.REJECTED ? dto.rejectReason : null,
@@ -909,11 +899,48 @@ export class ApplicationsService {
     return {
       ...updated,
       statusLabel: this.statusLabel(updated.status),
+      resolvedApplicationId: application.id,
       emailNotification: {
         willSend: Boolean(application.applicant.email),
         target: application.applicant.email ?? null,
       },
     };
+  }
+
+  private async resolveApplicationForStatusUpdate(id: string) {
+    const direct = await this.prisma.application.findUnique({
+      where: { id },
+      include: {
+        applicant: {
+          select: {
+            id: true,
+            email: true,
+          },
+        },
+      },
+    });
+    if (direct) {
+      return direct;
+    }
+
+    // 일부 클라이언트가 application.id 대신 asset.id를 넘기는 경우를 호환 처리
+    const byAsset = await this.prisma.application.findFirst({
+      where: { assetId: id },
+      include: {
+        applicant: {
+          select: {
+            id: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (byAsset) {
+      return byAsset;
+    }
+
+    return null;
   }
 
   private async getApplicantFromToken(userId: string) {
