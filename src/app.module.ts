@@ -5,8 +5,10 @@ import jwtConfig from './config/jwt.config';
 import s3Config from './config/s3.config';
 import { PrismaModule } from './prisma/prisma.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
+import { AssetsModule } from './modules/assets/assets.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { FilesModule } from './modules/files/files.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -17,6 +19,8 @@ import { FilesModule } from './modules/files/files.module';
     PrismaModule,
     AuthModule,
     ApplicationsModule,
+    AssetsModule,
+    NotificationsModule,
     FilesModule,
   ],
 })

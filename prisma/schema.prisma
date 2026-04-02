@@ -130,8 +130,14 @@ model Application {
   businessIdea     String            @map("business_idea")
   businessType     String            @map("business_type")
   desiredStartDate DateTime          @map("desired_start_date") @db.Date
+  residentAgeGroup String?           @map("resident_age_group")
+  leasePurpose     String?           @map("lease_purpose")
+  occupantCount    Int?              @map("occupant_count")
+  remodelSummary   String?           @map("remodel_summary")
+  managerContact   String?           @map("manager_contact")
   status           ApplicationStatus @default(RECEIVED)
   rejectReason     String?           @map("reject_reason")
+  completedAt      DateTime?         @map("completed_at")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
 

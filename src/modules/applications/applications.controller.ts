@@ -20,9 +20,11 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { ParseUuidPipe } from '../../common/pipes/parse-uuid.pipe';
 import { ApplicationsService } from './applications.service';
+import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
 import { CancelApplicationDto } from './dto/cancel-application.dto';
+import { LookupApplicationDetailDto } from './dto/lookup-application-detail.dto';
 import { QuickApplicationDto } from './dto/quick-application.dto';
 import { RequestVerificationDto } from './dto/request-verification.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
@@ -32,6 +34,12 @@ import { VerifyCodeDto } from './dto/verify-code.dto';
 @Controller('applications')
 export class ApplicationsController {
   constructor(private readonly applicationsService: ApplicationsService) {}
+
+  @Post()
+  @ApiOperation({ summary: '신청 접수 (회원가입 없이 이름/전화번호 기반)' })
+  create(@Body() dto: QuickApplicationDto) {
+    return this.applicationsService.createQuick(dto);
+  }
 
   @Post('quick')
   @ApiOperation({ summary: '간편 신청 생성 (이름/전화번호 기반)' })
@@ -49,6 +57,12 @@ export class ApplicationsController {
   @ApiOperation({ summary: '인증번호 검증 후 신청내역 조회' })
   verifyAndLookup(@Body() dto: VerifyCodeDto) {
     return this.applicationsService.verifyAndLookup(dto);
+  }
+
+  @Post('lookup/detail')
+  @ApiOperation({ summary: '인증번호 검증 후 특정 신청 상세 조회' })
+  lookupDetail(@Body() dto: LookupApplicationDetailDto) {
+    return this.applicationsService.lookupDetail(dto);
   }
 
   @Patch(':id/cancel')
@@ -77,6 +91,15 @@ export class ApplicationsController {
   @ApiOperation({ summary: '관리자 신청 목록 조회' })
   adminList(@Query() query: AdminListQueryDto) {
     return this.applicationsService.adminList(query);
+  }
+
+  @Get('admin/kanban')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '관리자 칸반 보드 조회' })
+  adminKanban(@Query() query: AdminKanbanQueryDto) {
+    return this.applicationsService.adminKanban(query);
   }
 
   @Get('admin/:id')
