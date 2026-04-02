@@ -29,3 +29,9 @@ patches:
         path: /stringData
         value:
           DATABASE_URL: postgresql://postgres:yourpassword@postgres:5432/jeju_revillage?schema=public
+          GPS_API_KEY: ""
+          GPS_GEOCODE_URL: https://maps.googleapis.com/maps/api/geocode/json
+          GPS_REVERSE_GEOCODE_URL: https://maps.googleapis.com/maps/api/geocode/json
+          GEMINI_API_KEY: ""
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_BASE_URL: https://generativelanguage.googleapis.com

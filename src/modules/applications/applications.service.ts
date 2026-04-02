@@ -24,6 +24,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
+import { AutofillHouseDto } from './dto/autofill-house.dto';
 import { CancelApplicationDto } from './dto/cancel-application.dto';
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { LookupApplicationDetailDto } from './dto/lookup-application-detail.dto';
@@ -38,6 +39,17 @@ import { VerifyCodeDto } from './dto/verify-code.dto';
 interface VerificationCodeEntry {
   code: string;
   expiresAt: number;
+}
+
+export interface HouseAutoFillResult {
+  address: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  detectedAssetType: AssetType | null;
+  detectedAreaSqm: number | null;
+  recommendation: string | null;
+  recommendationReason: string | null;
+  warnings: string[];
 }
 
 type ApplicationListItem = Prisma.ApplicationGetPayload<{
@@ -93,8 +105,16 @@ export class ApplicationsService {
   async createQuick(dto: QuickApplicationDto) {
     const applicantName = this.resolveApplicantName(dto);
     const applicant = await this.findOrCreateApplicant(dto);
+    const autoFilled = await this.resolveAutoFillFromInput({
+      address: dto.address ?? dto.detectedAddress,
+      latitude: dto.latitude,
+      longitude: dto.longitude,
+      assetType: dto.assetType ?? dto.detectedAssetType,
+      areaSqm: dto.areaSqm ?? dto.detectedAreaSqm,
+      photoUrls: dto.photoUrls,
+    });
 
-    const assetId = await this.createAssetForQuickApplication(applicant.id, dto);
+    const assetId = await this.createAssetForQuickApplication(applicant.id, dto, autoFilled);
 
     const application = await this.createApplicationRecord(applicant.id, assetId, applicantName, dto);
 
@@ -108,8 +128,19 @@ export class ApplicationsService {
     return {
       ...application,
       statusLabel: this.statusLabel(application.status),
+      autoFilled,
       ...tokens,
     };
+  }
+
+  async autofillHouseInfo(dto: AutofillHouseDto): Promise<HouseAutoFillResult> {
+    if (!dto.address && (dto.latitude == null || dto.longitude == null) && !dto.photoUrls?.length) {
+      throw new BadRequestException(
+        '자동입력을 위해 주소 또는 위도/경도 또는 사진 중 하나 이상이 필요합니다.',
+      );
+    }
+
+    return this.resolveAutoFillFromInput(dto);
   }
 
   private async createApplicationRecord(
@@ -630,11 +661,26 @@ export class ApplicationsService {
     }
   }
 
-  private async createAssetForQuickApplication(ownerId: string, dto: QuickApplicationDto): Promise<string> {
+  private async createAssetForQuickApplication(
+    ownerId: string,
+    dto: QuickApplicationDto,
+    autoFilled: HouseAutoFillResult,
+  ): Promise<string> {
     const name = this.resolveApplicantName(dto);
-    const address = dto.address ?? dto.detectedAddress ?? '주소 미입력';
-    const assetType = dto.assetType ?? dto.detectedAssetType ?? AssetType.EMPTY_HOUSE;
-    const areaSqm = dto.areaSqm ?? dto.detectedAreaSqm;
+    const address = dto.address ?? dto.detectedAddress ?? autoFilled.address ?? '주소 미입력';
+    const assetType =
+      dto.assetType ??
+      dto.detectedAssetType ??
+      autoFilled.detectedAssetType ??
+      AssetType.EMPTY_HOUSE;
+    const areaSqm = dto.areaSqm ?? dto.detectedAreaSqm ?? autoFilled.detectedAreaSqm ?? undefined;
+    const latitude = dto.latitude ?? autoFilled.latitude ?? undefined;
+    const longitude = dto.longitude ?? autoFilled.longitude ?? undefined;
+    const aiRecommendation = autoFilled.recommendation
+      ? `\n\n[AI 추천]\n${autoFilled.recommendation}${
+          autoFilled.recommendationReason ? `\n사유: ${autoFilled.recommendationReason}` : ''
+        }`
+      : '';
     let asset;
     try {
       asset = await this.prisma.asset.create({
@@ -645,12 +691,12 @@ export class ApplicationsService {
           address,
           regionCode: 'JEJU-UNKNOWN',
           areaSqm,
-          latitude: dto.latitude,
-          longitude: dto.longitude,
-          description: dto.notes,
+          latitude,
+          longitude,
+          description: `${dto.notes ?? ''}${aiRecommendation}`.trim() || null,
           images: {
             create:
-              dto.photoUrls?.map((url, index) => ({
+            dto.photoUrls?.map((url, index) => ({
                 fileUrl: url,
                 sortOrder: index,
               })) ?? [],
@@ -785,6 +831,262 @@ export class ApplicationsService {
     return [...fromTyped, ...fromLegacy];
   }
 
+  private async resolveAutoFillFromInput(dto: AutofillHouseDto): Promise<HouseAutoFillResult> {
+    const result: HouseAutoFillResult = {
+      address: dto.address ?? null,
+      latitude: dto.latitude ?? null,
+      longitude: dto.longitude ?? null,
+      detectedAssetType: dto.assetType ?? null,
+      detectedAreaSqm: dto.areaSqm ?? null,
+      recommendation: null,
+      recommendationReason: null,
+      warnings: [],
+    };
+
+    const hasGpsKey = Boolean(this.configService.get<string>('ai.gpsApiKey'));
+    const hasGeminiKey = Boolean(this.configService.get<string>('ai.geminiApiKey'));
+
+    if (!result.address && result.latitude != null && result.longitude != null) {
+      try {
+        const reverseAddress = await this.reverseGeocode(result.latitude, result.longitude);
+        if (reverseAddress) {
+          result.address = reverseAddress;
+        } else if (!hasGpsKey) {
+          result.warnings.push('GPS_API_KEY가 설정되지 않아 주소 자동입력을 건너뜁니다.');
+        }
+      } catch {
+        result.warnings.push('GPS 역지오코딩에 실패했습니다. 주소를 직접 입력해주세요.');
+      }
+    }
+
+    if ((!result.latitude || !result.longitude) && result.address) {
+      try {
+        const geocoded = await this.geocodeAddress(result.address);
+        if (geocoded) {
+          result.latitude = geocoded.latitude;
+          result.longitude = geocoded.longitude;
+          result.address = geocoded.address ?? result.address;
+        } else if (!hasGpsKey) {
+          result.warnings.push('GPS_API_KEY가 설정되지 않아 좌표 자동입력을 건너뜁니다.');
+        }
+      } catch {
+        result.warnings.push('주소 기반 좌표 자동입력에 실패했습니다.');
+      }
+    }
+
+    if (dto.photoUrls?.length) {
+      const aiRecommendation = await this.recommendByGemini(dto.photoUrls, result.address);
+      if (aiRecommendation) {
+        result.recommendation = aiRecommendation.recommendation;
+        result.recommendationReason = aiRecommendation.reason;
+
+        if (!result.detectedAssetType && aiRecommendation.detectedAssetType) {
+          result.detectedAssetType = aiRecommendation.detectedAssetType;
+        }
+        if (!result.detectedAreaSqm && aiRecommendation.detectedAreaSqm) {
+          result.detectedAreaSqm = aiRecommendation.detectedAreaSqm;
+        }
+      } else {
+        result.warnings.push(
+          hasGeminiKey
+            ? '사진 기반 AI 추천 생성에 실패했습니다.'
+            : 'GEMINI_API_KEY가 설정되지 않아 AI 추천을 건너뜁니다.',
+        );
+      }
+    }
+
+    return result;
+  }
+
+  private async geocodeAddress(address: string): Promise<{
+    latitude: number;
+    longitude: number;
+    address: string | null;
+  } | null> {
+    const apiKey = this.configService.get<string>('ai.gpsApiKey');
+    const baseUrl = this.configService.get<string>('ai.gpsGeocodeUrl');
+    if (!apiKey || !baseUrl) {
+      return null;
+    }
+
+    const url = `${baseUrl}?address=${encodeURIComponent(address)}&key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      status?: string;
+      results?: Array<{
+        formatted_address?: string;
+        geometry?: { location?: { lat?: number; lng?: number } };
+      }>;
+    };
+    if (data.status !== 'OK' || !data.results?.length) {
+      return null;
+    }
+
+    const first = data.results[0];
+    const lat = first.geometry?.location?.lat;
+    const lng = first.geometry?.location?.lng;
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      return null;
+    }
+
+    return {
+      latitude: lat,
+      longitude: lng,
+      address: first.formatted_address ?? null,
+    };
+  }
+
+  private async reverseGeocode(latitude: number, longitude: number): Promise<string | null> {
+    const apiKey = this.configService.get<string>('ai.gpsApiKey');
+    const baseUrl = this.configService.get<string>('ai.gpsReverseGeocodeUrl');
+    if (!apiKey || !baseUrl) {
+      return null;
+    }
+
+    const url = `${baseUrl}?latlng=${latitude},${longitude}&key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      status?: string;
+      results?: Array<{ formatted_address?: string }>;
+    };
+    if (data.status !== 'OK' || !data.results?.length) {
+      return null;
+    }
+
+    return data.results[0]?.formatted_address ?? null;
+  }
+
+  private async recommendByGemini(
+    photoUrls: string[],
+    address: string | null,
+  ): Promise<{
+    recommendation: string;
+    reason: string | null;
+    detectedAssetType: AssetType | null;
+    detectedAreaSqm: number | null;
+  } | null> {
+    const geminiApiKey = this.configService.get<string>('ai.geminiApiKey');
+    const geminiModel = this.configService.get<string>('ai.geminiModel');
+    const geminiBaseUrl = this.configService.get<string>('ai.geminiBaseUrl');
+    if (!geminiApiKey || !geminiModel || !geminiBaseUrl) {
+      return null;
+    }
+
+    const imageParts = (
+      await Promise.all(photoUrls.slice(0, 3).map((url) => this.fetchImageInlineData(url)))
+    ).filter((part): part is { inline_data: { mime_type: string; data: string } } => part !== null);
+
+    if (imageParts.length === 0) {
+      return null;
+    }
+
+    const prompt = [
+      '다음은 제주 빈집/건물 사진입니다.',
+      '어르신 자산주의 활용 추천을 JSON으로만 반환해주세요.',
+      'JSON schema: {"recommendation":"string","reason":"string","detectedAssetType":"EMPTY_HOUSE|WAREHOUSE|FIELD|OTHER","detectedAreaSqm":number|null}',
+      `주소 참고: ${address ?? '미제공'}`,
+    ].join('\n');
+
+    const endpoint = `${geminiBaseUrl}/v1beta/models/${geminiModel}:generateContent?key=${encodeURIComponent(geminiApiKey)}`;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: prompt }, ...imageParts],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('') ?? '';
+    if (!text) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(text) as {
+        recommendation?: string;
+        reason?: string;
+        detectedAssetType?: string;
+        detectedAreaSqm?: number | null;
+      };
+      if (!parsed.recommendation) {
+        return null;
+      }
+
+      return {
+        recommendation: parsed.recommendation,
+        reason: parsed.reason ?? null,
+        detectedAssetType: this.toAssetType(parsed.detectedAssetType),
+        detectedAreaSqm:
+          typeof parsed.detectedAreaSqm === 'number' && parsed.detectedAreaSqm > 0
+            ? Math.round(parsed.detectedAreaSqm)
+            : null,
+      };
+    } catch {
+      return {
+        recommendation: text.slice(0, 500),
+        reason: null,
+        detectedAssetType: null,
+        detectedAreaSqm: null,
+      };
+    }
+  }
+
+  private async fetchImageInlineData(
+    url: string,
+  ): Promise<{ inline_data: { mime_type: string; data: string } } | null> {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        return null;
+      }
+      const contentType = response.headers.get('content-type') ?? 'image/jpeg';
+      const bytes = Buffer.from(await response.arrayBuffer()).toString('base64');
+      return {
+        inline_data: {
+          mime_type: contentType,
+          data: bytes,
+        },
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private toAssetType(value: string | undefined): AssetType | null {
+    if (!value) return null;
+    if (value === AssetType.EMPTY_HOUSE) return AssetType.EMPTY_HOUSE;
+    if (value === AssetType.WAREHOUSE) return AssetType.WAREHOUSE;
+    if (value === AssetType.FIELD) return AssetType.FIELD;
+    if (value === AssetType.OTHER) return AssetType.OTHER;
+    return null;
+  }
+
   private toApplicationCard(application: ApplicationListItem) {
     const leaseYears = application.contract
       ? dayjs(application.contract.endDate).diff(dayjs(application.contract.startDate), 'year', true)
@@ -828,12 +1130,12 @@ export class ApplicationsService {
     const payload = { sub: userId, email, role };
     const [accessToken, refreshToken] = await Promise.all([
       this.jwtService.signAsync(payload, {
-        secret: this.configService.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        expiresIn: this.configService.get<string>('JWT_ACCESS_EXPIRES_IN') ?? '15m',
+        secret: this.configService.getOrThrow<string>('jwt.accessSecret'),
+        expiresIn: this.configService.get<string>('jwt.accessExpiresIn') ?? '15m',
       }),
       this.jwtService.signAsync(payload, {
-        secret: this.configService.getOrThrow<string>('JWT_REFRESH_SECRET'),
-        expiresIn: this.configService.get<string>('JWT_REFRESH_EXPIRES_IN') ?? '7d',
+        secret: this.configService.getOrThrow<string>('jwt.refreshSecret'),
+        expiresIn: this.configService.get<string>('jwt.refreshExpiresIn') ?? '7d',
       }),
     ]);
 

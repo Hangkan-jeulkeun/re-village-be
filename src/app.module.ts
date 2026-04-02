@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import aiConfig from './config/ai.config';
 import appConfig from './config/app.config';
 import jwtConfig from './config/jwt.config';
 import s3Config from './config/s3.config';
@@ -13,7 +14,7 @@ import { FilesModule } from './modules/files/files.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [appConfig, jwtConfig, s3Config],
+      load: [appConfig, jwtConfig, s3Config, aiConfig],
     }),
     PrismaModule,
     AuthModule,

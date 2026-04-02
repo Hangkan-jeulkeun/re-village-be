@@ -23,6 +23,7 @@ import { ApplicationsService } from './applications.service';
 import { AdminKanbanQueryDto } from './dto/admin-kanban-query.dto';
 import { AdminListQueryDto } from './dto/admin-list-query.dto';
 import { AdminSummaryQueryDto } from './dto/admin-summary-query.dto';
+import { AutofillHouseDto } from './dto/autofill-house.dto';
 import { CancelApplicationDto } from './dto/cancel-application.dto';
 import { LookupApplicationDetailDto } from './dto/lookup-application-detail.dto';
 import { QuickApplicationDto } from './dto/quick-application.dto';
@@ -34,6 +35,12 @@ import { VerifyCodeDto } from './dto/verify-code.dto';
 @Controller('applications')
 export class ApplicationsController {
   constructor(private readonly applicationsService: ApplicationsService) {}
+
+  @Post('autofill')
+  @ApiOperation({ summary: 'GPS/사진 기반 빈집 정보 자동입력 추천' })
+  autofill(@Body() dto: AutofillHouseDto) {
+    return this.applicationsService.autofillHouseInfo(dto);
+  }
 
   @Post()
   @ApiOperation({ summary: '신청 접수 (회원가입 없이 이름/전화번호 기반)' })
